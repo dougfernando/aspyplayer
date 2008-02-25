@@ -33,7 +33,7 @@ class MusicsFactory(object):
 	# BUG Unicode error for strange files paths
 	def load_directory_musics(self, arg, dirname, names):
 		mp3_files = filter(lambda n: n.endswith(".mp3"), map(unicode, names))
-		
+
 		for name in mp3_files:
 			music_path = os.path.join(dirname, unicode(name))
 			music = Music(music_path)
@@ -606,6 +606,9 @@ class DbHelper(object):
 
 #### ----------- Testing ------------------------------ #
 class Fixtures(object):
+	def __init__(self):
+		pass
+		
 	def run(self):
 #		self.db_tests()
 		self.as_tests()
