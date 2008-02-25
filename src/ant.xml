@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="last_fm" default="deploy" basedir=".">
+
+  <property name="source_modules" value="C:\\dev\\python\\pythonenv\\MyPythonTest\\src" />
+  <property name="destiny_modules" value="C:\\Symbian\\9.3\\S60_3rd_FP2_Beta\\epoc32\\winscw\\c\\resource" />
+  
+  <property name="source_app" value="C:\\dev\\python\\pythonenv\\MyPythonTest\\src\\KenobiPlayer.py" />
+  <property name="destiny_app" value="C:\\symbian\\9.3\\s60_3rd_fp2_beta\\epoc32\\winscw\\c\\python\\KenobiPlayer.py" /> 
+  
+  <target name="deploy">
+      <copy todir="${destiny_modules}">
+          <fileset dir="${source_modules}">
+          </fileset>
+      </copy>
+      
+      <copy file="${source_app}" tofile="${destiny_app}"/>
+  </target>
+</project>
