@@ -14,6 +14,8 @@
 # limitations under the License.
 
 from random import shuffle
+from key_codes import EKeyLeftArrow, EKeyRightArrow, EKeySelect 
+
 import appuifw
 import audio
 import e32
@@ -24,13 +26,14 @@ import time
 import urllib
 import socket
 
-#### ----------- Model ------------------------------ # 
+##########################################################
+######################### MODELS 
 
 class MusicsFactory(object):
 	def __init__(self):
 		self.__all_musics = []
 	
-	# BUG Unicode error for strange files paths
+	# TODO: Bug Unicode error for strange files paths
 	def load_directory_musics(self, arg, dirname, names):
 		mp3_files = filter(lambda n: n.endswith(".mp3"), map(unicode, names))
 
@@ -43,6 +46,7 @@ class MusicsFactory(object):
 		os.path.walk(root_path, self.load_directory_musics, None)
 
 		return self.__all_musics
+
 
 class Music(object):
 	def __init__(self, file_path=""):
@@ -113,17 +117,15 @@ class Music(object):
 	def length_formatted(self):
 		return self.format_secs_to_str(self.length)
 	
-	def format_secs_to_str(self, value):
-		hours = value / 3600
-		
-		seconds_remaining = value % 3600
-		
+	def format_secs_to_str(self, seconds):
+		hours = seconds / 3600
+		seconds_remaining = seconds % 3600
 		minutes = seconds_remaining / 60
 		
 		if minutes > 1:
 			seconds = minutes % 60
 		else:
-			seconds = value % 60
+			seconds = seconds % 60
 
 		if hours >= 1:
 			return unicode("%02i:%02i:%02i" % (hours, minutes, seconds))
@@ -154,13 +156,13 @@ class MusicPlayer(object):
 		self.__player.play(times=1, interval=0, callback=callback)
 
 	def configure_volume(self):
-		# HACK, I don't know why, but using directly the class attribute does not work
+		# HACK: I don't know why, but using directly the class attribute does not work
 		volume = self.__class__.current_volume 
 		if volume < 0: # default value = -1
 			default_volume = self.__player.max_volume() / 4
 			self.__class__.current_volume = default_volume
 
-		self.__volume_step = self.__player.max_volume() / 10 # TODO maybe it can be a constant
+		self.__volume_step = self.__player.max_volume() / 10 # TODO: maybe it can be a constant
 		self.__player.set_volume(self.__class__.current_volume)
 		
 	def stop(self):
@@ -207,7 +209,8 @@ class MusicPlayer(object):
 	def current_position(self):
 		return self.__player.current_position()
 
-# TODO This class has a bad name, it must be renamed	
+
+# FIXME: This class has a bad name, it must be renamed	
 class MusicList(object):
 	def __init__(self, music_factory, root_path, listener, random = False):
 		self.__timer = e32.Ao_timer()
@@ -236,7 +239,6 @@ class MusicList(object):
 			while self.current_music.is_playing():
 				if not added_to_history:
 					if self.current_music.player.can_be_added_to_history():
-						print 'Now it can be added'
 						self.__listener.add_to_history(self.current_music)
 						added_to_history = True
 				
@@ -291,45 +293,45 @@ class MusicList(object):
 	def current_position_formated(self):
 		return unicode("%i / %i" % (self.__current_index + 1, len(self.__musics)))
 
+
 class MusicHistory(object):
 	def __init__(self, repository, audio_scrobbler_service):
-		self.batch_size = 50
-		self.repository = repository
+		self.__batch_size = 50
+		self.__repository = repository
 		self.__audio_scrobbler_service = audio_scrobbler_service
 
 	def add_music(self, music):
-		print 'Added to history %s' % (music.title)
-		self.repository.save_music(music)
+		self.__repository.save_music(music)
 	
 	def clear(self):
-		self.repository.clear_history()
+		self.__repository.clear_history()
 	
 	def send_to_audioscrobbler(self):
-		musics = self.repository.load_all_history()
-		if musics and len(musics) < self.batch_size:
+		musics = self.__repository.load_all_history()
+		if musics and len(musics) < self.__batch_size:
 			self.__audio_scrobbler_service.send(musics)
 			self.clear()
 		elif musics:
 			self.send_batches_to_audioscrobbler(musics)
 
 	def send_batches_to_audioscrobbler(self, musics):
-		assert len(musics) >= self.batch_size
+		assert len(musics) >= self.__batch_size
 		
-		num_full_batches = len(musics) / self.batch_size
+		num_full_batches = len(musics) / self.__batch_size
 		for i in range(num_full_batches):
-			start = i * self.batch_size
-			end = start + self.batch_size
+			start = i * self.__batch_size
+			end = start + self.__batch_size
 			batch = musics[start:end]
 			self.send_batch(batch)
 		
-		remainings = len(musics) % self.batch_size
+		remainings = len(musics) % self.__batch_size
 		if remainings > 0:
 			batch = musics[len(musics)-remainings:len(musics)]
 			self.send_batch(batch)
 		
 	def send_batch(self, musics_batch):
 		self.__audio_scrobbler_service.send(musics_batch)
-		self.repository.remove_musics(musics_batch)
+		self.__repository.remove_musics(musics_batch)
 
 
 class AudioScrobblerUser(object):
@@ -340,15 +342,16 @@ class AudioScrobblerUser(object):
 		else:
 			self.password = password
 
-#### ----------- Repositories ------------------------------ #
+##########################################################
+######################### REPOSITORIES 
 
 class AudioScrobblerUserRepository(object):
 	def __init__(self, db_helper):
-		self.db_helper = db_helper
+		self.__db_helper = db_helper
 
 	def load(self):
 		cmd = "SELECT UserName, Password FROM User"
-		rows = self.db_helper.execute_reader(cmd)
+		rows = self.__db_helper.execute_reader(cmd)
 		if rows:
 			return AudioScrobblerUser(rows[0][0], rows[0][1], True)
 		
@@ -358,36 +361,36 @@ class AudioScrobblerUserRepository(object):
 		remove_cmd = "DELETE FROM USER"
 		insert_cmd = "INSERT INTO User (UserName, Password) VALUES('%s', '%s')" % (user.username, user.password)
 
-		result = self.db_helper.execute_nonquery(remove_cmd)
-		result = self.db_helper.execute_nonquery(insert_cmd)
+		result = self.__db_helper.execute_nonquery(remove_cmd)
+		result = self.__db_helper.execute_nonquery(insert_cmd)
 		assert result > 0
 	
 
 # TODO close the db	
 class MusicHistoryRepository(object):
 	def __init__(self, db_helper):
-		self.db_helper = db_helper
+		self.__db_helper = db_helper
 	
 	def save_music(self, music):
 		cmd = "INSERT INTO Music_History (Artist, Track, PlayedAt, Album, TrackLength) VALUES('%s', '%s', %i, '%s', %i)" % \
 				(music.artist.replace("'", "''"), music.title.replace("'", "''"), 
 					music.played_at, music.album.replace("'", "''"), music.length)
 		
-		result = self.db_helper.execute_nonquery(cmd)
+		result = self.__db_helper.execute_nonquery(cmd)
 		assert result > 0
 
 	def remove_musics(self, musics):
 		for music in musics:
 			cmd = "DELETE FROM Music_History WHERE PlayedAt = %i" % (music.played_at)
-			self.db_helper.execute_nonquery(cmd)
+			self.__db_helper.execute_nonquery(cmd)
 	
 	def clear_history(self):
 		cmd = "DELETE FROM Music_History"
-		self.db_helper.execute_nonquery(cmd)
+		self.__db_helper.execute_nonquery(cmd)
 	
 	def load_all_history(self):
 		cmd = "SELECT Artist, Track, PlayedAt, Album, TrackLength FROM Music_History"
-		rows = self.db_helper.execute_reader(cmd)
+		rows = self.__db_helper.execute_reader(cmd)
 		result = []
 		for row in rows:
 			music = Music()
@@ -401,9 +404,9 @@ class MusicHistoryRepository(object):
 		return result
 
 
+##########################################################
+######################### SERVICES 
 
-
-#### ----------- Services ------------------------------ #	
 
 class AudioScrobblerError(Exception):
 	pass
@@ -413,44 +416,47 @@ class NoAudioScrobblerUserError(Exception):
 
 class AudioScrobblerService(object):
 	def __init__(self, user_repository): 
-		self.user_repository = user_repository
 		self.logged = False
-		self.handshake_url = "http://post.audioscrobbler.com/"
-		self.handshake_data = None
-		self.session_id = None
-		self.now_url = None
-		self.post_url = None
-		self.user = None
+		self.__user_repository = user_repository
+		self.__handshake_url = "http://post.audioscrobbler.com/"
+		self.__handshake_data = None
+		self.__session_id = None
+		self.__now_url = None
+		self.__post_url = None
+		self.__user = None
+	
+	def set_credentials(self, user):
+		self.__user_repository.save(user)
 		
 	def create_handshake_data(self):
-		user = self.user_repository.load()
-		if not user:
+		self.__user = self.__user_repository.load()
+		if not self.__user:
 			raise NoAudioScrobblerUserError("You must set an user/password first")
 		
 		client_id = "tst"
 		client_version = "1.0"
 		tstamp = int(time.time())
-		token  = md5.md5("%s%d" % (self.password, tstamp)).hexdigest()
+		token  = md5.md5("%s%d" % (self.__user.password, tstamp)).hexdigest()
    		
    		values = {
 			"hs": "true", 
          	"p": '1.2', 
          	"c": client_id, 
          	"v": client_version, 
-         	"u": self.username, 
+         	"u": self.__user.username, 
          	"t": tstamp, 
          	"a": token
 	 	}
    		
-   		self.handshake_data = urllib.urlencode(values)
+   		self.__handshake_data = urllib.urlencode(values)
 
 	def login(self):
 		self.create_handshake_data()
-		response = urllib.urlopen("%s?%s" % (self.handshake_url, self.handshake_data))
-		self.session_id, self.now_url, self.post_url = self.handle_handshake_response(response)
+		response = urllib.urlopen("%s?%s" % (self.__handshake_url, self.__handshake_data))
+		self.__session_id, self.__now_url, self.__post_url = self.handle_handshake_response(response)
 		self.logged = True
 		
-		print "%s %s %s" % (self.session_id, self.now_url, self.post_url)
+		print "%s %s %s" % (self.__session_id, self.__now_url, self.__post_url)
 	
 	def handle_handshake_response(self, response):
 		result = response.read()
@@ -469,19 +475,19 @@ class AudioScrobblerService(object):
 		elif error == "BADTIME":
 			raise AudioScrobblerError("'Your system time is out of sync with Audioscrobbler. Consider using an NTP-client to keep you system time in sync.'")
 		elif error.startswith("FAILED"):
-	  		raise AudioScrobblerError("Authencitation with AS failed. Reason: %s" % error)
+	  		raise AudioScrobblerError("Authentication with AS failed. Reason: %s" % error)
 		else:
-			raise AudioScrobblerError("Authencitation with AS failed.")
+			raise AudioScrobblerError("Authentication with AS failed.")
 	
 	def check_login(self):
 		if not self.logged:
-			raise Exception("You must be logged to execute this operation")
+			raise AudioScrobblerError("You must be logged to execute this operation")
 		
 	def now_playing(self, music):
 		self.check_login()
 		
 		values = {
-			"s": self.session_id, 
+			"s": self.__session_id, 
 			"a": unicode(music.artist).encode("utf-8"), 
 			"t": unicode(music.title).encode("utf-8"), 
 			"b": unicode(music.album).encode("utf-8"), 
@@ -491,8 +497,7 @@ class AudioScrobblerService(object):
 		}
 
 		data = urllib.urlencode(values)
-
-		response = urllib.urlopen(self.now_url, data)
+		response = urllib.urlopen(self.__now_url, data)
 		result = response.read()
 	
 		if result.strip() == "OK":
@@ -507,8 +512,7 @@ class AudioScrobblerService(object):
 		self.check_login()
 		
 		data = self.create_send_music_data(musics)
-		
-		response = urllib.urlopen(self.post_url, data)
+		response = urllib.urlopen(self.__post_url, data)
 		result = response.read()
 		result_value = result.split("\n")[0]
 
@@ -546,28 +550,36 @@ class AudioScrobblerService(object):
 				values[key + ("[%d]" % i)] = item[key]
 			i = i + 1
 			
-		values["s"] = self.session_id
+		values["s"] = self.__session_id
 
 		data = urllib.urlencode(values)
 		
 		return data
 
-#### ----------- Infra ------------------------------ #
+##########################################################
+######################### INFRASTRUCTURE 
+
 
 class DbHelper(object):
 	def __init__(self, dbpath):
-		self.dbpath = dbpath
-		db_already_exists = os.path.exists(self.dbpath) 
+		self.__db_path = dbpath
+		db_already_exists = os.path.exists(self.__db_path) 
 		
 		self.db = e32db.Dbms()
 		self.dbv = e32db.Db_view()
 		
-		try:
+		if db_already_exists:
 			self.db.open(unicode(dbpath))
-		except:
+		else:
+			self.check_db_directory()
 			self.db.create(unicode(dbpath))
 			self.db.open(unicode(dbpath))
 			self.create_tables()
+
+	def check_db_directory(self):
+		db_dir = os.path.split(self.__db_path)[0]
+		if not os.path.exists(db_dir):
+			os.makedirs(db_dir)
 
 	def execute_nonquery(self, sql):
 		return self.db.execute(unicode(sql))
@@ -604,48 +616,18 @@ class DbHelper(object):
 		cmd = "CREATE TABLE User (UserName varchar(200), Password varchar(200))"
 		self.execute_nonquery(cmd)
 
-#### ----------- Testing ------------------------------ #
-class Fixtures(object):
-	def __init__(self):
-		pass
-		
-	def run(self):
-#		self.db_tests()
-		self.as_tests()
-	
-	def as_tests(self):
-		as_service = AudioScrobblerService("doug_fernando", "sko445")
-		as_service.login()
-		music = Music("E:\\Music\\Bloc Party - Silent Alarm\\01 - Like Eating Glass.mp3")
-		music.length = 261
-		music.played_at = int(time.time()) - 40
-		print "Sent %s" % (as_service.send([music]))
-	
-	def db_tests(self):
-		repos = MusicHistoryRepository("c:\\data\\kenobi_player\\history.db")
-		repos.clear_history()
 
-		music = Music("E:\\Music\\Bloc Party - Silent Alarm\\01 - Like Eating Glass.mp3")
-		music.length = 261
-		music.played_at = int(time.time()) - 40
-
-		repos.save_music(music)
-		musics = repos.load_all_history()
-		
-		for amusic in musics:
-			print amusic
-
-
-#### ----------- UI ------------------------------ #
+##########################################################
+######################### USER INTERFACE 
 
 
 class PlayerUI(object):
 	def __init__(self, music_factory, music_history, audio_scrobbler_service):
 		self.__music_factory = music_factory
-		self.__applock = e32.Ao_lock()
 		self.__music_history = music_history
 		self.__audio_scrobbler_service = audio_scrobbler_service
 		self.__ap_services = AccessPointServices()
+		self.__applock = e32.Ao_lock()
 		self.__default_font = None
 		self.__default_body = None
 		self.__selecting_directory = False
@@ -659,8 +641,8 @@ class PlayerUI(object):
 		self.config_events()
 	
 	def basic_config(self):
-		appuifw.app.screen='normal'
-		appuifw.app.title = u"Aclumbático PLAYER"
+		appuifw.app.screen = "normal"
+		appuifw.app.title = u"Audioscrobbler PyS60 Player"
 	
 	def init_menus(self):
 		appuifw.app.menu = [(u"Select the Music DIR", self.select_directory), 
@@ -671,10 +653,12 @@ class PlayerUI(object):
 								(u"Next", self.next))), 
 							(u"Volume", 
 									((u"Up", self.volume_up), (u"Down", self.volume_down))), 
-							(u"LastFm", 	(
+							(u"Last.fm", (
 								(u"Connect", self.connect), 
 								(u"Clear History", self.clear_as_db), 
-								(u"Submit History", self.send_history))), 
+								(u"Submit History", self.send_history),
+								(u"Set Credentials", self.create_as_credentials))),
+								 
 							(u"Tests", self.test), 
 							(u"Exit", self.quit)]
 		
@@ -700,13 +684,40 @@ class PlayerUI(object):
 	def connect(self):
 		if not self.is_online():
 			self.__ap_services.set_accesspoint()
-			self.long_operation(lambda: self.__audio_scrobbler_service.login())
+			login = lambda: self.__audio_scrobbler_service.login()
+			try:
+				self.long_operation(login)
+			except NoAudioScrobblerUserError:
+				self.create_as_credentials()
+				self.long_operation(login)
+	
+	def create_as_credentials(self):
+		user_name = appuifw.query(u"Inform your username", "text")
+		while not self.check_input(user_name):
+			user_name = appuifw.query(u"Inform your username", "text")
+		
+		password = appuifw.query(u"Inform your password", "code")
+		while not self.check_input(password):
+			password = appuifw.query(u"Inform your password", "code")
+		
+		self.__audio_scrobbler_service.set_credentials(AudioScrobblerUser(user_name, password))
+		
+	def check_input(self, input):
+		if len(input) < 1:
+			appuifw.note(u"It cannot be empty", "info")
+			return False
+		
+		return True
 	
 	def send_history(self):
 		if not self.is_online():
-			self.connect()
-		
+			if not self.connect():
+				self.show_cannot_connect()
+
 		self.__music_history.send_to_audioscrobbler()
+	
+	def show_cannot_connect(self):
+		appuifw.note(u"It was not possible to connect!", "error")
 	
 	def play(self): 
 		if self.check_selected_directory():
@@ -748,9 +759,8 @@ class PlayerUI(object):
 		lb = self.__directory_selector.run()
 		self.__selecting_directory = True
 		appuifw.app.body = lb
-		appuifw.app.menu = [
-						(u"Selecionar", self.__directory_selector.select_dir),
-						(u"Cancelar", self.set_selected_directory)]
+		appuifw.app.menu = [(u"Selecionar", self.__directory_selector.select_dir),
+							(u"Cancelar", self.set_selected_directory)]
 	
 	def set_selected_directory(self, dir=None):
 		if dir:
@@ -819,102 +829,103 @@ class PlayerUI(object):
 		appuifw.app.exit_key_handler = None
 
 
-class SelectorPath:
+class DirectoryNavigatorContent:
 	def __init__(self):
-		self.drivelist = e32.drive_list()
-		self.current_directory = None
+		self.__drivelist = e32.drive_list()
+		self.__current_directory = None
+		self.__dir_list = None
 	
-	def pop(self):
-		if not self.current_directory:
+	def move_up(self):
+		if not self.__current_directory:
 			return
 
-		up_dir = os.path.split(self.current_directory)[0]
-		if up_dir != self.current_directory:
-			self.current_directory = up_dir
+		up_dir = os.path.split(self.__current_directory)[0]
+		if up_dir != self.__current_directory:
+			self.__current_directory = up_dir
 		else:
-			self.current_directory = None
+			self.__current_directory = None
 			
-	def get(self, idx):
-		if self.current_directory:
-			if len(self.dirlist) > 0:
-				ret = os.path.join(self.current_directory, self.dirlist[idx])
+	def move_down(self, idx):
+		if self.__current_directory:
+			if len(self.__dir_list) > 0:
+				ret = os.path.join(self.__current_directory, self.__dir_list[idx])
 			else:
-				ret = self.current_directory
+				ret = self.__current_directory
 		else:
-			ret = self.dirlist[idx] + os.sep
+			ret = self.__dir_list[idx] + os.sep
 		
 		return ret
 		
-	def cd(self, idx):
-		self.current_directory = self.get(idx)
+	def change_dir(self, idx):
+		self.__current_directory = self.move_down(idx)
 
 	def get_list(self):
-		self.dirlist = None
+		self.__dir_list = None
 		
-		if not self.current_directory:
-			entries = self.drivelist
-			self.dirlist = self.drivelist
+		if not self.__current_directory:
+			entries = self.__drivelist
+			self.__dir_list = self.__drivelist
 		else:
-			is_dir = lambda n: os.path.isdir(os.path.join(self.current_directory, n))
-			self.dirlist = map(unicode, filter(is_dir, os.listdir(self.current_directory)))
+			is_dir = lambda n: os.path.isdir(os.path.join(self.__current_directory, n))
+			self.__dir_list = map(unicode, filter(is_dir, os.listdir(self.__current_directory)))
 
-			entries = self.dirlist
+			entries = self.__dir_list
 						
 		return entries
 
 	def get_current_dir(self):
-		return self.current_directory
+		return self.__current_directory
+
 
 class DirectorySelector:
 	def __init__(self, select_action):
-		self.path = SelectorPath()
-		self.select_action = select_action
-		self.lb = None
+		self.__navigator = DirectoryNavigatorContent()
+		self.__select_action = select_action
+		self.__list_box = None
 
 	def init(self):
-		self.path = SelectorPath()
-		self.lb = None
+		self.__navigator = DirectoryNavigatorContent()
+		self.__list_box = None
 
 	def run(self):
-		from key_codes import EKeyLeftArrow, EKeyRightArrow, EKeySelect 
+		entries = self.__navigator.get_list()
 		
-		entries = self.path.get_list()
+		self.__list_box = appuifw.Listbox(entries, self.move_down)
+		self.__list_box.bind(EKeyRightArrow, lambda: self.move_down())
+		self.__list_box.bind(EKeySelect, lambda: self.select_dir())
+		self.__list_box.bind(EKeyLeftArrow, lambda: self.move_up())
 		
-		self.lb = appuifw.Listbox(entries, self.lbox_observe)
-		self.lb.bind(EKeyRightArrow, lambda: self.lbox_observe())
-		self.lb.bind(EKeySelect, lambda: self.select_dir())
-		self.lb.bind(EKeyLeftArrow, lambda: self.move_up())
-		
-		self.lb.set_list(entries)
+		self.__list_box.set_list(entries)
 
-		return self.lb
+		return self.__list_box
 
 	def move_up(self):
-		self.path.pop()
-		entries = self.path.get_list()
-		self.lb.set_list(entries)
+		self.__navigator.move_up()
+		entries = self.__navigator.get_list()
+		self.__list_box.set_list(entries)
 
 	def select_dir(self):
-		self.lbox_observe()
-		selected = self.path.get_current_dir()
-		self.select_action(selected)
+		self.move_down()
+		selected = self.__navigator.get_current_dir()
+		self.__select_action(selected)
 
-	def lbox_observe(self):
-		index = self.lb.current()
+	def move_down(self):
+		index = self.__list_box.current()
 
-		selected = self.path.get(index)
-		self.path.cd(index)
+		selected = self.__navigator.move_down(index)
+		self.__navigator.change_dir(index)
 
-		entries = self.path.get_list()
+		entries = self.__navigator.get_list()
 		if entries:
-			self.lb.set_list(entries)
+			self.__list_box.set_list(entries)
 
+# TODO: remove the hardcoded file path
 class AccessPointServices(object):
 	def __init__(self, access_point_file_path="e:\\apid.txt"):
-		self.ap_file_path = access_point_file_path
+		self.__ap_file_path = access_point_file_path
 	
 	def unset_accesspoint(self):
-		f = open(self.ap_file_path, "w")
+		f = open(self.__ap_file_path, "w")
 		f.write(repr(None))
 		f.close()
 		appuifw.note(u"Default access point is unset ", "info")
@@ -922,7 +933,7 @@ class AccessPointServices(object):
 	def select_accesspoint(self):
 		apid = socket.select_access_point()
 		if appuifw.query(u"Set as default?", "query") == True:
-			f = open(self.ap_file_path, "w")
+			f = open(self.__ap_file_path, "w")
 			f.write(repr(apid))
 			f.close()
 			appuifw.note(u"Saved default access point ", "info")
@@ -931,7 +942,7 @@ class AccessPointServices(object):
 
 	def set_accesspoint(self):
 		try:
-			f = open(self.ap_file_path, "rb")
+			f = open(self.__ap_file_path, "rb")
 			setting = f.read()
 			apid = eval(setting)
 			f.close()
@@ -945,12 +956,12 @@ class AccessPointServices(object):
 
 
 if __name__ == u"__main__":
-	db_helper = DbHelper("c:\\data\\kenobi_player\\history.db")
+	db_helper = DbHelper("c:\\data\\aspyplayer\\aspyplayer.db")
 
 	history_repository = MusicHistoryRepository(db_helper)
 	user_repository = AudioScrobblerUserRepository(db_helper)
 
-	as_service = AudioScrobblerService("doug_fernando", "sko445")	
+	as_service = AudioScrobblerService(user_repository)	
 	history = MusicHistory(history_repository, as_service)
 	
 	ui = PlayerUI(MusicsFactory(), history, as_service)
@@ -960,3 +971,39 @@ if __name__ == u"__main__":
 	finally:
 		ui.close()
 		print "bye" 
+
+
+
+##########################################################
+######################### TESTING 
+
+class Fixtures(object):
+	def __init__(self):
+		pass
+		
+	def run(self):
+#		self.db_tests()
+#		self.as_tests()
+		pass
+	
+	def as_tests(self):
+		as_service = AudioScrobblerService(None)
+		as_service.login()
+		music = Music("E:\\Music\\Bloc Party - Silent Alarm\\01 - Like Eating Glass.mp3")
+		music.length = 261
+		music.played_at = int(time.time()) - 40
+		print "Sent %s" % (as_service.send([music]))
+	
+	def db_tests(self):
+		repos = MusicHistoryRepository("c:\\data\\aspyplayer\\aspyplayer.db")
+		repos.clear_history()
+
+		music = Music("E:\\Music\\Bloc Party - Silent Alarm\\01 - Like Eating Glass.mp3")
+		music.length = 261
+		music.played_at = int(time.time()) - 40
+
+		repos.save_music(music)
+		musics = repos.load_all_history()
+		
+		for amusic in musics:
+			print amusic
