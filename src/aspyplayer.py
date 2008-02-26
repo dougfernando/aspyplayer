@@ -43,8 +43,8 @@ class MusicsFactory(object):
 			self.__all_musics.append(music)
 		
 	def load_all_musics(self, root_path):
+		self.__all_musics = []
 		os.path.walk(root_path, self.load_directory_musics, None)
-
 		return self.__all_musics
 
 
@@ -91,7 +91,7 @@ class Music(object):
 	def stop(self):
 		self.player.stop()
 		
-	def pause(self):
+	def pause(self):	
 		self.player.pause()
 		
 	def volume_up(self):
@@ -103,13 +103,24 @@ class Music(object):
 	def is_playing(self):
 		return self.player.is_playing()
 
+	def get_player_position_in_seconds(self):
+		return int(self.player.current_position() / 1e6)
+
 	def can_update_position(self):
-		curr_pos = int(self.player.current_position() / 1e6)
+		curr_pos = self.get_player_position_in_seconds()
 		if self.position != curr_pos:
 			self.position = curr_pos
 			return True
 	
 		return False
+
+	def can_be_added_to_history(self):
+		player_curr_pos = self.get_player_position_in_seconds()
+		min_length_cond = player_curr_pos > 30
+		min_length_played_cond = (player_curr_pos > 240 or (
+				float(player_curr_pos) / self.length) > 0.5)
+		
+		return min_length_cond and min_length_played_cond
 
 	def current_position_formatted(self):
 		return self.format_secs_to_str(self.position)
@@ -122,10 +133,7 @@ class Music(object):
 		seconds_remaining = seconds % 3600
 		minutes = seconds_remaining / 60
 		
-		if minutes > 1:
-			seconds = minutes % 60
-		else:
-			seconds = seconds % 60
+		seconds = seconds % 60
 
 		if hours >= 1:
 			return unicode("%02i:%02i:%02i" % (hours, minutes, seconds))
@@ -162,6 +170,8 @@ class MusicPlayer(object):
 			default_volume = self.__player.max_volume() / 4
 			self.__class__.current_volume = default_volume
 
+		print 'max volume %s' % self.__player.max_volume()
+
 		self.__volume_step = self.__player.max_volume() / 10 # TODO: maybe it can be a constant
 		self.__player.set_volume(self.__class__.current_volume)
 		
@@ -197,15 +207,8 @@ class MusicPlayer(object):
 		return self.__player.state() == 2
 
 	def current_volume_percentage(self):
-		return (self.__class__.current_volume / self.__player.max_volume()) * 100
+		return (float(self.__class__.current_volume) / self.__player.max_volume()) * 100
 	
-	def can_be_added_to_history(self):
-		min_length_cond = self.__player.current_position() > 30e6
-		min_length_played_cond = (self.__player.current_position() > 240e6 or
-			float(self.__player.current_position()) / float(self.__player.duration()) > 0.5)
-		
-		return min_length_cond and min_length_played_cond
-
 	def current_position(self):
 		return self.__player.current_position()
 
@@ -238,7 +241,7 @@ class MusicList(object):
 			added_to_history = False;
 			while self.current_music.is_playing():
 				if not added_to_history:
-					if self.current_music.player.can_be_added_to_history():
+					if self.current_music.can_be_added_to_history():
 						self.__listener.add_to_history(self.current_music)
 						added_to_history = True
 				
@@ -411,6 +414,9 @@ class MusicHistoryRepository(object):
 class AudioScrobblerError(Exception):
 	pass
 
+class AudioScrobblerCredentialsError(Exception):
+	pass
+
 class NoAudioScrobblerUserError(Exception):
 	pass
 
@@ -423,32 +429,32 @@ class AudioScrobblerService(object):
 		self.__session_id = None
 		self.__now_url = None
 		self.__post_url = None
-		self.__user = None
 	
 	def set_credentials(self, user):
 		self.__user_repository.save(user)
 		
 	def create_handshake_data(self):
-		self.__user = self.__user_repository.load()
-		if not self.__user:
+		user = self.__user_repository.load()
+		if not user:
 			raise NoAudioScrobblerUserError("You must set an user/password first")
 		
 		client_id = "tst"
 		client_version = "1.0"
 		tstamp = int(time.time())
-		token  = md5.md5("%s%d" % (self.__user.password, tstamp)).hexdigest()
+		token  = md5.md5("%s%d" % (user.password, tstamp)).hexdigest()
    		
    		values = {
 			"hs": "true", 
-         	"p": '1.2', 
-         	"c": client_id, 
-         	"v": client_version, 
-         	"u": self.__user.username, 
-         	"t": tstamp, 
-         	"a": token
+			"p": '1.2', 
+			"c": client_id, 
+			"v": client_version, 
+			"u": user.username, 
+			"t": tstamp, 
+			"a": token
 	 	}
    		
    		self.__handshake_data = urllib.urlencode(values)
+   		print self.__handshake_data
 
 	def login(self):
 		self.create_handshake_data()
@@ -469,7 +475,7 @@ class AudioScrobblerService(object):
 		
 	def handle_handshake_error(self, error):
 		if error == "BADAUTH":
-			raise AudioScrobblerError("Bad username/password")
+			raise AudioScrobblerCredentialsError("Bad username/password")
 		elif error == "BANNED":
 			raise AudioScrobblerError("'This client-version was banned by Audioscrobbler. Please contact the author of this module!'")
 		elif error == "BADTIME":
@@ -647,10 +653,10 @@ class PlayerUI(object):
 	def init_menus(self):
 		appuifw.app.menu = [(u"Select the Music DIR", self.select_directory), 
 							(u"Controls", (
-								(u"Play", self.play), 
+								(u"Play", self.play),
 								(u"Stop", self.stop), 
-								(u"Previous", self.previous), 
-								(u"Next", self.next))), 
+								(u"Next", self.next),
+								(u"Previous", self.previous))), 
 							(u"Volume", 
 									((u"Up", self.volume_up), (u"Down", self.volume_down))), 
 							(u"Last.fm", (
@@ -658,9 +664,11 @@ class PlayerUI(object):
 								(u"Clear History", self.clear_as_db), 
 								(u"Submit History", self.send_history),
 								(u"Set Credentials", self.create_as_credentials))),
-								 
-							(u"Tests", self.test), 
+							(u"Tests", self.test),
+							(u"About", self.about), 
 							(u"Exit", self.quit)]
+	def about(self):
+		appuifw.note(u"AsPy Player\nCreated by Douglas\n(doug.fernando at gmail)\n\ncode.google.com/p/aspyplayer", "info")
 		
 	def test(self):
 		Fixtures().run()
@@ -669,7 +677,15 @@ class PlayerUI(object):
 		t = appuifw.Text()
 		appuifw.app.body = t
 		self.__default_font = t.font
-		t.set(u"Please select a directory using the menu")
+		t.color = (255, 0, 0)
+		t.style = appuifw.STYLE_BOLD
+		t.add(u"\n  Audioscrobbler pyS60 player\n\n\n")
+		t.color = 0
+		t.style = appuifw.STYLE_ITALIC | appuifw.STYLE_BOLD 
+		t.add(u" Using the 'options' menu, select a directory with the musics to be played\n\n\n")
+		t.font = u"albi9b"
+		t.add(u"web site:\n\n    http://code.google.com/p/aspyplayer/")
+
 	
 	def config_events(self):
 		appuifw.app.exit_key_handler = self.quit
@@ -684,12 +700,24 @@ class PlayerUI(object):
 	def connect(self):
 		if not self.is_online():
 			self.__ap_services.set_accesspoint()
-			login = lambda: self.__audio_scrobbler_service.login()
+
 			try:
-				self.long_operation(login)
+				return self.try_login()
 			except NoAudioScrobblerUserError:
 				self.create_as_credentials()
-				self.long_operation(login)
+				return self.try_login()
+			
+			return False
+	
+	def try_login(self):
+		login = lambda: self.__audio_scrobbler_service.login()
+		try:
+			self.long_operation(login)
+			return True
+		except AudioScrobblerCredentialsError:
+			appuifw.note(u"Bad Username/Password. Change your credentials", "error")
+
+		return False
 	
 	def create_as_credentials(self):
 		user_name = appuifw.query(u"Inform your username", "text")
@@ -701,6 +729,8 @@ class PlayerUI(object):
 			password = appuifw.query(u"Inform your password", "code")
 		
 		self.__audio_scrobbler_service.set_credentials(AudioScrobblerUser(user_name, password))
+		
+		appuifw.note(u"Credentials saved", "info")
 		
 	def check_input(self, input):
 		if len(input) < 1:
@@ -721,6 +751,10 @@ class PlayerUI(object):
 	
 	def play(self): 
 		if self.check_selected_directory():
+			self.music_list.play()
+
+	def pause(self): 
+		if self.music_list:
 			self.music_list.play()
 	
 	def long_operation(self, operation):
@@ -831,7 +865,7 @@ class PlayerUI(object):
 
 class DirectoryNavigatorContent:
 	def __init__(self):
-		self.__drivelist = e32.drive_list()
+		self.__drivelist = [u"C:", u"E:"]
 		self.__current_directory = None
 		self.__dir_list = None
 	
@@ -954,24 +988,22 @@ class AccessPointServices(object):
 		except:
 			self.select_accesspoint()
 
+class ServiceLocator(object):
+	def __init__(self):
+		self.db_helper = DbHelper("c:\\data\\aspyplayer\\aspyplayer.db")
+		self.history_repository = MusicHistoryRepository(self.db_helper)
+		self.user_repository = AudioScrobblerUserRepository(self.db_helper)
+		self.as_service = AudioScrobblerService(self.user_repository)	
+		self.music_history = MusicHistory(self.history_repository, self.as_service)
+		self.music_factory = MusicsFactory()
 
-if __name__ == u"__main__":
-	db_helper = DbHelper("c:\\data\\aspyplayer\\aspyplayer.db")
-
-	history_repository = MusicHistoryRepository(db_helper)
-	user_repository = AudioScrobblerUserRepository(db_helper)
-
-	as_service = AudioScrobblerService(user_repository)	
-	history = MusicHistory(history_repository, as_service)
-	
-	ui = PlayerUI(MusicsFactory(), history, as_service)
-
-	try:
-		ui.start()
-	finally:
-		ui.close()
-		print "bye" 
-
+	def close(self):
+		self.db_helper = None
+		self.history_repository = None
+		self.user_repository = None
+		self.as_service = None	
+		self.music_history = None
+		self.music_factory = None
 
 
 ##########################################################
@@ -979,31 +1011,124 @@ if __name__ == u"__main__":
 
 class Fixtures(object):
 	def __init__(self):
-		pass
+		self.sl = ServiceLocator()
+		f = open("E:\\as.pwd", "rb")
+		self.pwd = f.read().replace(" ", "")
+		f.close()
+		print self.pwd
 		
 	def run(self):
-#		self.db_tests()
-#		self.as_tests()
-		pass
+		self.history_repository_tests()
+		self.audio_scrobbler_service_tests()
+		self.music_factory_tests()
+		self.music_tests()
+		self.user_tests()
+		appuifw.note(u"All tests passed!", "info")
 	
-	def as_tests(self):
-		as_service = AudioScrobblerService(None)
-		as_service.login()
+	def audio_scrobbler_service_tests(self):
+		if self.pwd:
+			as_service = self.sl.as_service
+			as_service.set_credentials(AudioScrobblerUser("doug_fernando", self.pwd))
+			as_service.login()
+		
+			assert as_service.logged
+			
+			music = self.load_music()
+			
+			result = as_service.now_playing(music)
+			assert result
+			
+			result = as_service.send([music])
+			assert result
+	
+	def music_factory_tests(self):
+		mf = self.sl.music_factory
+		musics = mf.load_all_musics("E:\\Music\\Bloc Party - Silent Alarm\\")
+		
+		assert len(musics) == 16
+		
+		musics = mf.load_all_musics("E:\\Music\\Muse - Absolution")
+		
+		assert len(musics) == 14
+	
+	def load_music(self):
 		music = Music("E:\\Music\\Bloc Party - Silent Alarm\\01 - Like Eating Glass.mp3")
 		music.length = 261
 		music.played_at = int(time.time()) - 40
-		print "Sent %s" % (as_service.send([music]))
+		return music
 	
-	def db_tests(self):
-		repos = MusicHistoryRepository("c:\\data\\aspyplayer\\aspyplayer.db")
+	def history_repository_tests(self):
+		repos = self.sl.history_repository
 		repos.clear_history()
 
-		music = Music("E:\\Music\\Bloc Party - Silent Alarm\\01 - Like Eating Glass.mp3")
-		music.length = 261
-		music.played_at = int(time.time()) - 40
+		musics = repos.load_all_history()
+		
+		assert len(musics) == 0
+
+		music = self.load_music()
 
 		repos.save_music(music)
 		musics = repos.load_all_history()
 		
-		for amusic in musics:
-			print amusic
+		assert len(musics) > 0
+
+	def music_tests(self):
+		music = self.load_music()
+		music.position = 135
+		
+		assert unicode(music.title) == u"Like Eating Glass"
+		assert unicode(music.artist) == u"Bloc Party"
+		assert unicode(music.album) == u"Silent Alarm [Japan Bonus Trac"
+		
+		length_formatted = music.length_formatted()
+		assert unicode("04:21") == unicode(length_formatted) 
+		
+		current_pos_formatted = music.current_position_formatted()
+		assert unicode("02:15") == unicode(current_pos_formatted)
+		
+		assert music.remove_X00("ABC\x00") == "ABC"
+		
+		music.get_player_position_in_seconds = lambda: 200
+		assert music.can_update_position() # updated
+		assert music.can_update_position() == False
+
+		music.get_player_position_in_seconds = lambda: 20
+		assert music.can_be_added_to_history() == False
+		music.length = 600
+		music.get_player_position_in_seconds = lambda: 200
+		assert music.can_be_added_to_history() == False
+		music.get_player_position_in_seconds = lambda: 250
+		assert music.can_be_added_to_history()
+		music.length = 261
+		music.get_player_position_in_seconds = lambda: 135
+		assert music.can_be_added_to_history()
+		
+	def user_tests(self):
+		user = AudioScrobblerUser("doug_fernando", "hiaa29348")
+		assert user.username == "doug_fernando"
+		assert user.password == "894f117cc2e31a7195ad628cadf8da1a"
+
+		user2 = AudioScrobblerUser("doug_fernando", "abc", True)
+		assert user2.username == "doug_fernando"
+		assert user2.password == "abc"
+
+##########################################################
+######################### MAIN 
+
+
+if __name__ == u"__main__":
+	
+	sl = ServiceLocator()
+	ui = PlayerUI(sl.music_factory, sl.music_history, sl.as_service)
+
+	try:
+		ui.start()
+	finally:
+		ui.close()
+		sl.close()
+		print "bye" 
+
+
+
+
+		
