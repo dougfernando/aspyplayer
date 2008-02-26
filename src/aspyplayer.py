@@ -144,12 +144,13 @@ class Music(object):
 class MusicPlayer(object):
 	current_volume = -1
 
-	def __init__(self, music):
+	def __init__(self, music, player=None):
 		self.__music = music
 		self.__paused = False
-		self.__loaded = False
-		self.__player = None
+		self.loaded = False
+		self.__player = player
 		self.__current_position = None
+		self.volume_step = 1
 	
 	def play(self, callback=None):
 		if not self.__paused:
@@ -157,7 +158,7 @@ class MusicPlayer(object):
 			self.configure_volume()
 			self.__music.length = int(self.__player.duration() / 1e6)
 			self.__music.played_at = int(time.time())
-			self.__loaded = True
+			self.loaded = True
 		else:
 			self.__player.set_position(self.__current_position)
 		
@@ -170,34 +171,32 @@ class MusicPlayer(object):
 			default_volume = self.__player.max_volume() / 4
 			self.__class__.current_volume = default_volume
 
-		print 'max volume %s' % self.__player.max_volume()
-
-		self.__volume_step = self.__player.max_volume() / 10 # TODO: maybe it can be a constant
+		self.volume_step = self.__player.max_volume() / 10 # TODO: maybe it can be a constant
 		self.__player.set_volume(self.__class__.current_volume)
 		
 	def stop(self):
-		if self.__loaded:
+		if self.loaded:
 			self.__player.stop()
 			self.__player.close()
-			self.__loaded = False
+			self.loaded = False
 	
 	def pause(self):
-		if self.__loaded:
+		if self.loaded:
 			self.__current_position = player.current_position()
 			self.__player.stop()
 			self.__paused = True
 
 	def volume_up(self):
-		if self.__loaded:
-			self.__class__.current_volume = self.__class__.current_volume + self.__volume_step
+		if self.loaded:
+			self.__class__.current_volume = self.__class__.current_volume + self.volume_step
 			if self.__class__.current_volume > self.__player.max_volume(): 
 				self.__class__.current_volume = self.__player.max_volume()
 			
 			self.__player.set_volume(self.__class__.current_volume)
 	
 	def volume_down(self):
-		if self.__loaded:
-			self.__class__.current_volume = self.__player.current_volume() - self.__volume_step
+		if self.loaded:
+			self.__class__.current_volume = self.__class__.current_volume - self.volume_step
 			if self.__class__.current_volume < 0:
 				self.__class__.current_volume = 0
 			
@@ -207,7 +206,7 @@ class MusicPlayer(object):
 		return self.__player.state() == 2
 
 	def current_volume_percentage(self):
-		return (float(self.__class__.current_volume) / self.__player.max_volume()) * 100
+		return int((float(self.__class__.current_volume) / self.__player.max_volume()) * 100)
 	
 	def current_position(self):
 		return self.__player.current_position()
@@ -238,24 +237,28 @@ class MusicList(object):
 			self.current_music.play(self.play_callback)
 			self.__listener.update_music(self.current_music)
 
-			added_to_history = False;
-			while self.current_music.is_playing():
-				if not added_to_history:
-					if self.current_music.can_be_added_to_history():
-						self.__listener.add_to_history(self.current_music)
-						added_to_history = True
+			self.play_current_music()
 				
-				if self.current_music.can_update_position():
-					self.__listener.update_music(self.current_music)
-				
-				e32.ao_yield()
-
-			self.__listener.finished_music(self.current_music)
-
 			if self.__should_stop: break
+			if not self.move_next(): break
 			
-			self.move_next()
 			self.__timer.after(0.3)
+	
+	def play_current_music(self):
+		added_to_history = False;
+		while self.current_music.is_playing():
+			if not added_to_history:
+				if self.current_music.can_be_added_to_history():
+					self.__listener.add_to_history(self.current_music)
+					added_to_history = True
+			
+			if self.current_music.can_update_position():
+				self.__listener.update_music(self.current_music)
+			
+			e32.ao_yield()
+
+		self.__listener.finished_music(self.current_music)
+
 	
 	def play_callback(self, current, previous, err):
 		pass
@@ -282,16 +285,18 @@ class MusicList(object):
 		last_index = len(self.__musics) - 1
 		if self.__current_index < last_index:
 			self.__current_index = self.__current_index + 1
-		else:
-			self.__current_index = last_index
-		self.current_music = self.__musics[self.__current_index]
+			self.current_music = self.__musics[self.__current_index]
+			return True
+	
+		return False
 	
 	def move_previous(self):
 		if self.__current_index > 0:
 			self.__current_index = self.__current_index - 1
-		else:
-			self.__current_index = 0
-		self.current_music = self.__musics[self.__current_index]
+			self.current_music = self.__musics[self.__current_index]
+			return True
+		
+		return False
 
 	def current_position_formated(self):
 		return unicode("%i / %i" % (self.__current_index + 1, len(self.__musics)))
@@ -1009,108 +1014,266 @@ class ServiceLocator(object):
 ##########################################################
 ######################### TESTING 
 
-class Fixtures(object):
-	def __init__(self):
-		self.sl = ServiceLocator()
-		f = open("E:\\as.pwd", "rb")
-		self.pwd = f.read().replace(" ", "")
-		f.close()
-		print self.pwd
-		
-	def run(self):
-		self.history_repository_tests()
-		self.audio_scrobbler_service_tests()
-		self.music_factory_tests()
-		self.music_tests()
-		self.user_tests()
-		appuifw.note(u"All tests passed!", "info")
-	
-	def audio_scrobbler_service_tests(self):
-		if self.pwd:
-			as_service = self.sl.as_service
-			as_service.set_credentials(AudioScrobblerUser("doug_fernando", self.pwd))
-			as_service.login()
-		
-			assert as_service.logged
-			
-			music = self.load_music()
-			
-			result = as_service.now_playing(music)
-			assert result
-			
-			result = as_service.send([music])
-			assert result
-	
-	def music_factory_tests(self):
-		mf = self.sl.music_factory
-		musics = mf.load_all_musics("E:\\Music\\Bloc Party - Silent Alarm\\")
-		
-		assert len(musics) == 16
-		
-		musics = mf.load_all_musics("E:\\Music\\Muse - Absolution")
-		
-		assert len(musics) == 14
-	
+class Fixture(object):
+	def assertTrue(self, condition, description):
+		if not condition: print description + " => NOT OK"
+		assert condition
+
 	def load_music(self):
 		music = Music("E:\\Music\\Bloc Party - Silent Alarm\\01 - Like Eating Glass.mp3")
 		music.length = 261
 		music.played_at = int(time.time()) - 40
 		return music
 	
-	def history_repository_tests(self):
+class AudioScrobblerServiceFixture(Fixture):
+	def __init__(self):
+		self.sl = ServiceLocator()
+		f = open("E:\\as.pwd", "rb")
+		self.pwd = f.read().replace(" ", "")
+		f.close()
+		self.title = "Audio scrobbler service tests"
+
+	def run(self):
+		if self.pwd:
+			as_service = self.sl.as_service
+			as_service.set_credentials(AudioScrobblerUser("doug_fernando", self.pwd))
+			as_service.login()
+		
+			self.assertTrue(as_service.logged, "Logging")
+			
+			music = self.load_music()
+			result = as_service.now_playing(music)
+			self.assertTrue(result, "Sent now playing to AS")
+			
+			result = as_service.send([music])
+			self.assertTrue(result, "Sent music to AS")
+
+class MusicsFactoryFixture(Fixture):
+	def __init__(self):
+		self.sl = ServiceLocator()
+		self.title = "Music factory tests"
+	
+	def run(self):
+		mf = self.sl.music_factory
+		
+		musics = mf.load_all_musics("E:\\Music\\Bloc Party - Silent Alarm\\")
+		self.assertTrue(len(musics) == 16, "Num of musics loaded")
+		
+		musics = mf.load_all_musics("E:\\Music\\Muse - Absolution")
+		self.assertTrue(len(musics) == 14, "Num of musics loaded")
+
+class MusicHistoryRepositoryFixture(Fixture):		
+	def __init__(self):
+		self.sl = ServiceLocator()
+		self.title = "Music history repository tests"
+
+	def run(self):
 		repos = self.sl.history_repository
 		repos.clear_history()
 
 		musics = repos.load_all_history()
-		
-		assert len(musics) == 0
+		self.assertTrue(len(musics) == 0, "Repository empty")
 
 		music = self.load_music()
-
 		repos.save_music(music)
 		musics = repos.load_all_history()
-		
-		assert len(musics) > 0
+		self.assertTrue(len(musics) > 0, "Repository not empty")
 
-	def music_tests(self):
+class MusicFixture(Fixture):
+	def __init__(self):
+		self.sl = ServiceLocator()
+		self.title = "Music tests"
+
+	def run(self):
 		music = self.load_music()
 		music.position = 135
 		
-		assert unicode(music.title) == u"Like Eating Glass"
-		assert unicode(music.artist) == u"Bloc Party"
-		assert unicode(music.album) == u"Silent Alarm [Japan Bonus Trac"
+		self.assertTrue(unicode(music.title) == u"Like Eating Glass", "Music title")
+		self.assertTrue(unicode(music.artist) == u"Bloc Party", "Music artist")
+		self.assertTrue(unicode(music.album) == u"Silent Alarm [Japan Bonus Trac", "Music Album")
 		
 		length_formatted = music.length_formatted()
-		assert unicode("04:21") == unicode(length_formatted) 
+		self.assertTrue(unicode("04:21") == unicode(length_formatted), "Correct length formatted") 
 		
 		current_pos_formatted = music.current_position_formatted()
-		assert unicode("02:15") == unicode(current_pos_formatted)
+		self.assertTrue(unicode("02:15") == unicode(current_pos_formatted), "Current position formatted")
 		
-		assert music.remove_X00("ABC\x00") == "ABC"
+		self.assertTrue(music.remove_X00("ABC\x00") == "ABC", "Remove unicode spaces")
 		
 		music.get_player_position_in_seconds = lambda: 200
-		assert music.can_update_position() # updated
-		assert music.can_update_position() == False
+		self.assertTrue(music.can_update_position(), "Can update position")
+		self.assertTrue(music.can_update_position() == False, "Cannot update position")
 
 		music.get_player_position_in_seconds = lambda: 20
-		assert music.can_be_added_to_history() == False
+		self.assertTrue(music.can_be_added_to_history() == False, "Cannot add to history")
 		music.length = 600
 		music.get_player_position_in_seconds = lambda: 200
-		assert music.can_be_added_to_history() == False
+		self.assertTrue(music.can_be_added_to_history() == False, "Cannot add to history")
 		music.get_player_position_in_seconds = lambda: 250
-		assert music.can_be_added_to_history()
+		self.assertTrue(music.can_be_added_to_history(), "Can add to history")
 		music.length = 261
 		music.get_player_position_in_seconds = lambda: 135
-		assert music.can_be_added_to_history()
-		
-	def user_tests(self):
+		self.assertTrue(music.can_be_added_to_history(), "Can add to history")
+
+class UserFixture(Fixture):
+	def __init__(self):
+		self.sl = ServiceLocator()
+		self.title = "User tests"
+
+	def run(self):
 		user = AudioScrobblerUser("doug_fernando", "hiaa29348")
-		assert user.username == "doug_fernando"
-		assert user.password == "894f117cc2e31a7195ad628cadf8da1a"
+		self.assertTrue(user.username == "doug_fernando", "Username")
+		self.assertTrue(user.password == "894f117cc2e31a7195ad628cadf8da1a", "Password hashed")
 
 		user2 = AudioScrobblerUser("doug_fernando", "abc", True)
-		assert user2.username == "doug_fernando"
-		assert user2.password == "abc"
+		self.assertTrue(user2.username == "doug_fernando", "Username")
+		self.assertTrue(user2.password == "abc", "Password")
+
+class MusicPlayerFixture(Fixture):
+	def __init__(self):
+		self.sl = ServiceLocator()
+		self.title = "Music player tests"
+
+	def run(self):
+		audio_player = FakePlayer()
+		
+		player = MusicPlayer(None, audio_player)
+		player.__class__.current_volume = -1
+		
+		player.configure_volume()
+		
+		self.assertTrue(player.__class__.current_volume == 2, "Currenct volume")
+		self.assertTrue(player.volume_step == 1, "Correct step")
+		
+		player.loaded = True
+		
+		player.__class__.current_volume = 0
+		player.volume_up()
+		self.assertTrue(player.__class__.current_volume == 1, "Current volume")
+
+		player.__class__.current_volume = 9
+		player.volume_up()
+		self.assertTrue(player.__class__.current_volume == 10, "Current volume")
+		player.volume_up()
+		self.assertTrue(player.__class__.current_volume == 10, "Current volume")
+		
+		player.__class__.current_volume = 2
+		player.volume_down()
+		self.assertTrue(player.__class__.current_volume == 1, "Current volume")
+		player.volume_down()
+		self.assertTrue(player.__class__.current_volume == 0, "Current volume")
+		player.volume_down()
+		self.assertTrue(player.__class__.current_volume == 0, "Current volume")
+
+		player.__class__.current_volume = 2
+		self.assertTrue(player.current_volume_percentage() == 20, "Current percentage")
+		
+		player.__class__.current_volume = 0
+		self.assertTrue(player.current_volume_percentage() == 0, "Current percentage")
+		
+		player.__class__.current_volume = 10
+		self.assertTrue(player.current_volume_percentage() == 100, "Current percentage")
+
+class FakePlayer(object):
+	def max_volume(self):
+		return 10;
+	
+	def set_volume(self, value):
+		pass
+
+class MusicHistoryFixture(Fixture):
+	def __init__(self):
+		self.sl = ServiceLocator()
+		self.title = "Music history tests"
+
+	def run(self):
+		self.music_history_tests()
+		self.send_batches_tests()
+	
+	def music_history_tests(self):
+		ms = []
+		for i in range(10):
+			ms.append(self.load_music())
+		
+		repos = MusicHistoryRepository(None)
+		repos.load_all_history = lambda: ms
+		repos.clear_history = lambda: None
+		
+		as_service = AudioScrobblerService(None)
+		empty = []
+		as_service.send = lambda musics:empty.append(1)
+		
+		m_h = MusicHistory(repos, as_service)
+		m_h.send_to_audioscrobbler()
+		
+		self.assertTrue(len(empty) > 0, "Simple send expected")
+		
+		for i in range(50):
+			ms.append(self.load_music())
+		
+		empty.pop()
+		old_method = m_h.send_batches_to_audioscrobbler
+		m_h.send_batches_to_audioscrobbler = lambda musics: None
+
+		m_h.send_to_audioscrobbler()
+		
+		self.assertTrue(len(empty) == 0, "Batch expected")
+		
+	def send_batches_tests(self):
+		musics = [i for i in range(135)]
+		l = []
+		m_h = MusicHistory(None, None)
+		m_h.send_batch = lambda batch: l.append(len(batch))
+		m_h.send_batches_to_audioscrobbler(musics)
+		self.assertTrue(l[0] == 50, "Batch 1")
+		self.assertTrue(l[1] == 50, "Batch 2")
+		self.assertTrue(l[2] == 35, "Batch 3")
+	
+class AudioScrobblerUserRepositoryFixture(Fixture):
+	def __init__(self):
+		self.sl = ServiceLocator()
+		self.title = "AudioScrobblerUserRepository tests"
+		f = open("E:\\as.pwd", "rb")
+		self.pwd = f.read().replace(" ", "")
+		f.close()
+
+	def run(self):
+		u = AudioScrobblerUser("doug_fernando", self.pwd)
+		self.sl.user_repository.save(u)
+		u2 = self.sl.user_repository.load()
+		
+		self.assertTrue(u.username == u2.username, "Users")
+		self.assertTrue(u.password != u2.password, "Passwords")
+	
+
+class MusicListFixture(Fixture):
+	def run(self):
+		pass
+
+class Fixtures(object):
+	def __init__(self):
+		self.tests = [
+			MusicsFactoryFixture(),
+			MusicFixture(),
+			MusicPlayerFixture(),
+			MusicListFixture(),
+			MusicHistoryFixture(),
+			UserFixture(),
+			AudioScrobblerUserRepositoryFixture(),
+			MusicHistoryRepositoryFixture()
+			#AudioScrobblerServiceFixture(),
+			#DbHelper
+			#PlayerUI 
+			#DirectoryNavigatorContent
+			#DirectorySelector
+		]
+		
+	
+	def run(self):
+		for test in self.tests:
+			test.run()
+		
+		appuifw.note(unicode("All %i test suites passed!" % len(self.tests)), "info")
 
 ##########################################################
 ######################### MAIN 
