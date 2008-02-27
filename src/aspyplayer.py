@@ -33,7 +33,7 @@ class MusicsFactory(object):
 	def __init__(self):
 		self.__all_musics = []
 	
-	# TODO: Bug Unicode error for strange files paths
+	# TODO: Bug Unicode error for strange files name, e.g, containing "è"
 	def load_directory_musics(self, arg, dirname, names):
 		def format_predicate(filename):
 			return filename.endswith(".mp3") or filename.endswith(".aac") 
@@ -706,7 +706,7 @@ class PlayerUI(object):
 		t.style = appuifw.STYLE_ITALIC | appuifw.STYLE_BOLD 
 		t.add(u" Using the 'options' menu, select a directory with the musics to be played\n\n\n")
 		t.font = u"albi9b"
-		t.add(u"web site:\n\n    http://code.google.com/p/aspyplayer/")
+		t.add(u"web site:\n    http://code.google.com/p/aspyplayer/")
 
 	def config_events(self):
 		appuifw.app.exit_key_handler = self.quit
@@ -805,6 +805,7 @@ class PlayerUIPresenter(object):
 		if not self.music_list.is_empty():
 			self.play()
 		else:
+			self.view.show_message("No musics in the selected directory")
 			self.view.render_initial_screen()
 			self.music_list = None
 
