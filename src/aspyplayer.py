@@ -473,6 +473,7 @@ class AudioScrobblerService(object):
    		self.__handshake_data = urllib.urlencode(values)
    		print self.__handshake_data
 
+	# TODO: consider the time to retry if failed
 	def login(self):
 		self.create_handshake_data()
 		response = urllib.urlopen("%s?%s" % (self.__handshake_url, self.__handshake_data))
