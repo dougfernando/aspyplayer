@@ -35,7 +35,10 @@ class MusicsFactory(object):
 	
 	# TODO: Bug Unicode error for strange files paths
 	def load_directory_musics(self, arg, dirname, names):
-		mp3_files = filter(lambda n: n.endswith(".mp3"), map(unicode, names))
+		def format_predicate(filename):
+			return filename.endswith(".mp3") or filename.endswith(".aac") 
+		
+		mp3_files = filter(format_predicate, map(unicode, names))
 
 		for name in mp3_files:
 			music_path = os.path.join(dirname, unicode(name))
@@ -58,6 +61,7 @@ class Music(object):
 		self.music_brainz_ID = ""
 		self.played_at = 0
 		self.position = 0
+		self.now_playing_sent = False
 	
 	def init_music(self):
 		if self.file_path:
@@ -139,7 +143,12 @@ class Music(object):
 			return unicode("%02i:%02i:%02i" % (hours, minutes, seconds))
 		else:
 			return unicode("%02i:%02i" % (minutes, seconds))
+	
+	def get_status_formatted(self):
+		if self.is_playing():
+			return "Playing"
 		
+		return "Stopped" 
 
 class MusicPlayer(object):
 	current_volume = -1
@@ -229,6 +238,9 @@ class MusicList(object):
 			self.current_music = self.__musics[0]
 		else:
 			self.current_music = None
+	
+	def is_empty(self):
+		return len(self.__musics) < 1
 	
 	def play(self):
 		self.__should_stop = False
@@ -495,6 +507,8 @@ class AudioScrobblerService(object):
 			raise AudioScrobblerError("You must be logged to execute this operation")
 		
 	def now_playing(self, music):
+		if music.now_playing_sent: return
+		
 		self.check_login()
 		
 		values = {
@@ -513,6 +527,7 @@ class AudioScrobblerService(object):
 	
 		if result.strip() == "OK":
 			print 'Sent Now Playing %s' % (music.title)
+			music.now_playing_sent = True
 			return True
 		elif result.strip() == "BADSESSION":
 			raise AudioScrobblerError("Invalid session")
@@ -631,20 +646,17 @@ class DbHelper(object):
 ##########################################################
 ######################### USER INTERFACE 
 
-
 class PlayerUI(object):
-	def __init__(self, music_factory, music_history, audio_scrobbler_service):
-		self.__music_factory = music_factory
-		self.__music_history = music_history
-		self.__audio_scrobbler_service = audio_scrobbler_service
-		self.__ap_services = AccessPointServices()
+	def __init__(self, service_locator):
+		self.presenter = PlayerUIPresenter(self, service_locator)
+		self.__ap_services = AccessPointServices(self)
 		self.__applock = e32.Ao_lock()
+		
 		self.__default_font = None
 		self.__default_body = None
-		self.__selecting_directory = False
+		self.__is_selecting_directory = False
 		self.__directory_selector = DirectorySelector(lambda dir: self.set_selected_directory(dir))
 		self.selected_directory = None
-		self.music_list = None
 		
 		self.basic_config()
 		self.init_menus()
@@ -656,29 +668,34 @@ class PlayerUI(object):
 		appuifw.app.title = u"Audioscrobbler PyS60 Player"
 	
 	def init_menus(self):
-		appuifw.app.menu = [(u"Select the Music DIR", self.select_directory), 
-							(u"Controls", (
-								(u"Play", self.play),
-								(u"Stop", self.stop), 
-								(u"Next", self.next),
-								(u"Previous", self.previous))), 
-							(u"Volume", 
-									((u"Up", self.volume_up), (u"Down", self.volume_down))), 
-							(u"Last.fm", (
-								(u"Connect", self.connect), 
-								(u"Clear History", self.clear_as_db), 
-								(u"Submit History", self.send_history),
-								(u"Set Credentials", self.create_as_credentials))),
-							(u"Tests", self.test),
-							(u"About", self.about), 
-							(u"Exit", self.quit)]
+		appuifw.app.menu = [
+			(u"Select the Music DIR", self.select_directory), 
+			(u"Controls", (
+				(u"Play", self.presenter.play),
+				(u"Stop", self.presenter.stop), 
+				(u"Next", self.presenter.next),
+				(u"Previous", self.presenter.previous))), 
+			(u"Volume", 
+				((u"Up", self.presenter.volume_up), (u"Down", self.presenter.volume_down))), 
+			(u"Last.fm", (
+				(u"Connect", self.presenter.connect), 
+				(u"Clear History", self.presenter.clear_as_db), 
+				(u"Submit History", self.presenter.send_history),
+				(u"Set Credentials", self.presenter.create_as_credentials))),
+			(u"Tests", self.test),
+			(u"About", self.about), 
+			(u"Exit", self.quit)]
+
 	def about(self):
-		appuifw.note(u"AsPy Player\nCreated by Douglas\n(doug.fernando at gmail)\n\ncode.google.com/p/aspyplayer", "info")
+		self.show_message("AsPy Player\nCreated by Douglas\n(doug.fernando at gmail)\n\ncode.google.com/p/aspyplayer")
 		
 	def test(self):
 		Fixtures().run()
 	
 	def init_background(self):
+		self.render_initial_screen()
+
+	def render_initial_screen(self):
 		t = appuifw.Text()
 		appuifw.app.body = t
 		self.__default_font = t.font
@@ -691,20 +708,115 @@ class PlayerUI(object):
 		t.font = u"albi9b"
 		t.add(u"web site:\n\n    http://code.google.com/p/aspyplayer/")
 
-	
 	def config_events(self):
 		appuifw.app.exit_key_handler = self.quit
 	
 	def quit(self):
-		self.stop()
-		self.__applock.signal()
+		try:
+			self.presenter.stop()
+		finally:
+			self.__applock.signal()
 	
+	def set_accesspoint(self):
+		self.__ap_services.set_accesspoint()
+
+	def show_message(self, message):
+		appuifw.note(unicode(message), "info")
+
+	def close(self):
+		appuifw.app.menu = []
+		appuifw.app.body = None
+		appuifw.app.exit_key_handler = None
+
+	def show_error_message(self, message):
+		appuifw.note(unicode(message), "error")
+
+	def ask_text(self, info):
+		return appuifw.query(unicode(info), "text")
+
+	def ask_password(self, info):
+		return appuifw.query(unicode(info), "code")
+
+	def ask(self, question):
+		return appuifw.query(unicode(question), "query")
+
+	def select_directory(self): 
+		self.__default_body = (appuifw.app.body, appuifw.app.menu) 
+		self.__directory_selector.init()
+		lb = self.__directory_selector.run()
+		self.__is_selecting_directory = True
+		appuifw.app.body = lb
+		appuifw.app.menu = [(u"Selecionar", self.__directory_selector.select_dir),
+							(u"Cancelar", self.cancel_select_directory)]
+
+	def cancel_select_directory(self):
+		appuifw.app.body, appuifw.app.menu = self.__default_body
+		self.__is_selecting_directory = False
+		if not self.presenter.is_in_play_mode():
+			self.render_initial_screen()
+
+	def set_selected_directory(self, dir=None):
+		if dir:
+			self.selected_directory = dir
+
+		appuifw.app.body, appuifw.app.menu = self.__default_body
+		self.__is_selecting_directory = False
+		self.presenter.update_directory()
+	
+	def update_music(self, music):
+		if not self.__is_selecting_directory:
+			self.show_music_information(music)
+			self.presenter.audio_scrobbler_now_playing(music)
+
+	def show_music_information(self, music):
+		t = appuifw.app.body 
+		t.set(u"")
+		t.font = self.__default_font
+		t.color = (255, 0, 0)
+		t.style = appuifw.STYLE_BOLD
+		t.add(u"Current:\n\n")
+		t.color = 0
+		t.style = appuifw.STYLE_ITALIC | appuifw.STYLE_BOLD 
+		t.add(unicode("  Artist: %s\n" % music.artist))
+		t.add(unicode("  Track: %s\n\n" % music.title))
+		t.font = u"albi10b"
+		t.add(unicode("  Status: %s\n\n" % music.get_status_formatted()))		
+		t.add(unicode("  %s - %s\n\n" % (music.current_position_formatted(), music.length_formatted())))
+		t.font = u"albi9b"
+		t.add(unicode("  %s" % self.presenter.get_current_list_position()))
+
+	def start(self):
+		self.__applock.wait()
+
+
+class PlayerUIPresenter(object):
+	def __init__(self, view, service_locator):
+		self.view = view
+		self.__music_factory = service_locator.music_factory
+		self.__music_history = service_locator.music_history
+		self.__audio_scrobbler_service = service_locator.as_service
+		self.music_list = None
+
+	def update_directory(self):
+		if self.music_list:
+			self.music_list.stop()
+		
+		self.music_list = MusicList(self.__music_factory, self.view.selected_directory, self)
+		if not self.music_list.is_empty():
+			self.play()
+		else:
+			self.view.render_initial_screen()
+			self.music_list = None
+
+	def is_in_play_mode(self):
+		return self.music_list
+
 	def clear_as_db(self):
 		self.__music_history.clear()
 	
 	def connect(self):
 		if not self.is_online():
-			self.__ap_services.set_accesspoint()
+			self.view.set_accesspoint()
 
 			try:
 				return self.try_login()
@@ -720,30 +832,21 @@ class PlayerUI(object):
 			self.long_operation(login)
 			return True
 		except AudioScrobblerCredentialsError:
-			appuifw.note(u"Bad Username/Password. Change your credentials", "error")
+			self.view.show_error_message("Bad Username/Password. Change your credentials")
 
 		return False
 	
 	def create_as_credentials(self):
-		user_name = appuifw.query(u"Inform your username", "text")
-		while not self.check_input(user_name):
-			user_name = appuifw.query(u"Inform your username", "text")
+		user_name = self.view.ask_text("Inform your username")
+		if not user_name: return
 		
-		password = appuifw.query(u"Inform your password", "code")
-		while not self.check_input(password):
-			password = appuifw.query(u"Inform your password", "code")
+		password = self.view.ask_password("Inform your password")
+		if not password: return
 		
 		self.__audio_scrobbler_service.set_credentials(AudioScrobblerUser(user_name, password))
 		
-		appuifw.note(u"Credentials saved", "info")
+		self.view.show_message("Credentials saved")
 		
-	def check_input(self, input):
-		if len(input) < 1:
-			appuifw.note(u"It cannot be empty", "info")
-			return False
-		
-		return True
-	
 	def send_history(self):
 		if not self.is_online():
 			if not self.connect():
@@ -752,7 +855,7 @@ class PlayerUI(object):
 		self.__music_history.send_to_audioscrobbler()
 	
 	def show_cannot_connect(self):
-		appuifw.note(u"It was not possible to connect!", "error")
+		self.view.show_error_message("It was not possible to connect!")
 	
 	def play(self): 
 		if self.check_selected_directory():
@@ -768,6 +871,7 @@ class PlayerUI(object):
 	def stop(self):
 		if self.music_list:	
 			self.music_list.stop()
+			self.update_music(self.music_list.current_music)
 			
 	def next(self):
 		if self.music_list:	
@@ -783,62 +887,21 @@ class PlayerUI(object):
 			self.show_current_volume()
 
 	def show_current_volume(self):
-		i = appuifw.InfoPopup()
-		i.show(u"Current_volume: %s" % self.music_list.current_music.player.current_volume_percentage(), 
-				(50, 50), 5000, 0, appuifw.EHLeftVTop)
+		self.view.show_message("Current_volume: %s" % (
+						self.music_list.current_music.player.current_volume_percentage()))
 		
 	def volume_down(self):
 		if self.music_list:	
 			self.music_list.current_music.volume_down()
 			self.show_current_volume()
 		
-	def select_directory(self): 
-		self.__default_body = (appuifw.app.body, appuifw.app.menu) 
-		self.__directory_selector.init()
-		lb = self.__directory_selector.run()
-		self.__selecting_directory = True
-		appuifw.app.body = lb
-		appuifw.app.menu = [(u"Selecionar", self.__directory_selector.select_dir),
-							(u"Cancelar", self.set_selected_directory)]
-	
-	def set_selected_directory(self, dir=None):
-		if dir:
-			self.selected_directory = dir
-
-		appuifw.app.body, appuifw.app.menu = self.__default_body
-		self.__selecting_directory = False
-		self.update_directory()
-	
-	def update_directory(self):
-		if self.music_list:
-			self.music_list.stop()
-		
-		self.music_list = MusicList(self.__music_factory, self.selected_directory, self, True)
-		self.play()
-	
 	def finished_music(self, music):
 		if self.is_online():
 			self.__music_history.send_to_audioscrobbler()
 	
 	def update_music(self, music):
-		if not self.__selecting_directory:
-			t = appuifw.app.body 
-			t.set(u"")
-			t.font = self.__default_font
-			t.color = (255, 0, 0)
-			t.style = appuifw.STYLE_BOLD
-			t.add(u"Current Playing:\n\n")
-			t.color = 0
-			t.style = appuifw.STYLE_ITALIC | appuifw.STYLE_BOLD 
-			t.add(unicode("  Artist: %s\n" % music.artist))
-			t.add(unicode("  Track: %s\n\n" % music.title))
-			t.font = u"albi10b"
-			t.add(unicode("  %s - %s\n\n" % (music.current_position_formatted(), music.length_formatted())))
-			t.font = u"albi9b"
-			t.add(unicode("  %s" % self.music_list.current_position_formated()))
-			
-			self.audio_scrobbler_now_playing(music)
-
+		self.view.update_music(music)
+	
 	def add_to_history(self, music):
 		self.__music_history.add_music(music)
 	
@@ -849,23 +912,57 @@ class PlayerUI(object):
 		if self.is_online():
 			self.__audio_scrobbler_service.now_playing(music)
 	
-	def start(self):
-		self.__applock.wait()
-	
 	def check_selected_directory(self):
-		if not self.selected_directory:
-			appuifw.note(u"It's necessary to select a directory first", "info")
+		if not self.view.selected_directory:
+			self.view.show_message("It's necessary to select a directory first")
 			return False
 		
 		return True
 
-	def show_message(self, message):
-		appuifw.note(unicode(message), "info")
-	
-	def close(self):
-		appuifw.app.menu = []
-		appuifw.app.body = None
-		appuifw.app.exit_key_handler = None
+	def get_current_list_position(self):
+		return self.music_list.current_position_formated()
+
+class DirectorySelector:
+	def __init__(self, select_action):
+		self.__navigator = DirectoryNavigatorContent()
+		self.__select_action = select_action
+		self.__list_box = None
+
+	def init(self):
+		self.__navigator = DirectoryNavigatorContent()
+		self.__list_box = None
+
+	def run(self):
+		entries = self.__navigator.get_list()
+		
+		self.__list_box = appuifw.Listbox(entries, self.move_down)
+		self.__list_box.bind(EKeyRightArrow, lambda: self.move_down())
+		self.__list_box.bind(EKeySelect, lambda: self.move_down())
+		self.__list_box.bind(EKeyLeftArrow, lambda: self.move_up())
+		
+		self.__list_box.set_list(entries)
+
+		return self.__list_box
+
+	def move_up(self):
+		self.__navigator.move_up()
+		entries = self.__navigator.get_list()
+		self.__list_box.set_list(entries)
+
+	def select_dir(self):
+		self.move_down()
+		selected = self.__navigator.get_current_dir()
+		self.__select_action(selected)
+
+	def move_down(self):
+		index = self.__list_box.current()
+
+		selected = self.__navigator.move_down(index)
+		self.__navigator.change_dir(index)
+
+		entries = self.__navigator.get_list()
+		if entries:
+			self.__list_box.set_list(entries)
 
 
 class DirectoryNavigatorContent:
@@ -916,66 +1013,26 @@ class DirectoryNavigatorContent:
 		return self.__current_directory
 
 
-class DirectorySelector:
-	def __init__(self, select_action):
-		self.__navigator = DirectoryNavigatorContent()
-		self.__select_action = select_action
-		self.__list_box = None
-
-	def init(self):
-		self.__navigator = DirectoryNavigatorContent()
-		self.__list_box = None
-
-	def run(self):
-		entries = self.__navigator.get_list()
-		
-		self.__list_box = appuifw.Listbox(entries, self.move_down)
-		self.__list_box.bind(EKeyRightArrow, lambda: self.move_down())
-		self.__list_box.bind(EKeySelect, lambda: self.select_dir())
-		self.__list_box.bind(EKeyLeftArrow, lambda: self.move_up())
-		
-		self.__list_box.set_list(entries)
-
-		return self.__list_box
-
-	def move_up(self):
-		self.__navigator.move_up()
-		entries = self.__navigator.get_list()
-		self.__list_box.set_list(entries)
-
-	def select_dir(self):
-		self.move_down()
-		selected = self.__navigator.get_current_dir()
-		self.__select_action(selected)
-
-	def move_down(self):
-		index = self.__list_box.current()
-
-		selected = self.__navigator.move_down(index)
-		self.__navigator.change_dir(index)
-
-		entries = self.__navigator.get_list()
-		if entries:
-			self.__list_box.set_list(entries)
-
 # TODO: remove the hardcoded file path
 class AccessPointServices(object):
-	def __init__(self, access_point_file_path="e:\\apid.txt"):
+	def __init__(self, view, access_point_file_path="e:\\apid.txt"):
+		self.__view = view
 		self.__ap_file_path = access_point_file_path
 	
 	def unset_accesspoint(self):
 		f = open(self.__ap_file_path, "w")
 		f.write(repr(None))
 		f.close()
-		appuifw.note(u"Default access point is unset ", "info")
+		self.__view.show_message("Default access point is unset ")
 
 	def select_accesspoint(self):
 		apid = socket.select_access_point()
-		if appuifw.query(u"Set as default?", "query") == True:
+		if self.__view.ask("Set as default?") == True:
 			f = open(self.__ap_file_path, "w")
 			f.write(repr(apid))
 			f.close()
-			appuifw.note(u"Saved default access point ", "info")
+			self.__view.show_message("Saved default access point")
+		
 		apo = socket.access_point(apid)
 		socket.set_default_access_point(apo)
 
@@ -985,13 +1042,14 @@ class AccessPointServices(object):
 			setting = f.read()
 			apid = eval(setting)
 			f.close()
-			if not apid == None:
+			if apid:
 				apo = socket.access_point(apid)
 				socket.set_default_access_point(apo)
 			else:
 				self.select_accesspoint()
 		except:
 			self.select_accesspoint()
+
 
 class ServiceLocator(object):
 	def __init__(self):
@@ -1015,6 +1073,11 @@ class ServiceLocator(object):
 ######################### TESTING 
 
 class Fixture(object):
+	def assertEquals(self, expected, result, description):
+		if expected != result:
+			print "expected: %s - found: %s for -> %s" % (expected, result, description)
+		assert expected == result
+	
 	def assertTrue(self, condition, description):
 		if not condition: print description + " => NOT OK"
 		assert condition
@@ -1115,6 +1178,13 @@ class MusicFixture(Fixture):
 		music.get_player_position_in_seconds = lambda: 135
 		self.assertTrue(music.can_be_added_to_history(), "Can add to history")
 
+		music.is_playing = lambda: True
+		self.assertEquals("Playing", music.get_status_formatted(), "playing status formatted")
+
+		music.is_playing = lambda: False
+		self.assertEquals("Stopped", music.get_status_formatted(), "stopped status formatted")
+
+
 class UserFixture(Fixture):
 	def __init__(self):
 		self.sl = ServiceLocator()
@@ -1173,6 +1243,8 @@ class MusicPlayerFixture(Fixture):
 		
 		player.__class__.current_volume = 10
 		self.assertTrue(player.current_volume_percentage() == 100, "Current percentage")
+		
+		player.__class__.current_volume = 2
 
 class FakePlayer(object):
 	def max_volume(self):
@@ -1242,11 +1314,33 @@ class AudioScrobblerUserRepositoryFixture(Fixture):
 		self.sl.user_repository.save(u)
 		u2 = self.sl.user_repository.load()
 		
-		self.assertTrue(u.username == u2.username, "Users")
-		self.assertTrue(u.password != u2.password, "Passwords")
+		self.assertEquals(u.username, u2.username, "Users")
+		self.assertEquals(u.password, u2.password, "Passwords")
 	
 
 class MusicListFixture(Fixture):
+	def run(self):
+		musics = [i for i in range(3)]
+		mf = MusicsFactory()
+		mf.load_all_musics = lambda m: musics
+		
+		ml = MusicList(mf, None, None)
+		
+		self.assertEquals("1 / 3", ml.current_position_formated(), "Correct first position")
+		self.assertTrue(ml.move_previous() == False, "Cannot move back from start")
+		self.assertTrue(ml.move_next(), "Can move forward")
+		self.assertEquals("2 / 3", ml.current_position_formated(), "Correct sec position")
+		self.assertTrue(ml.move_next(), "Can move forward")
+		self.assertEquals("3 / 3", ml.current_position_formated(), "Correct last position")
+		self.assertTrue(ml.move_next() == False, "Cannot move forward")
+		self.assertEquals("3 / 3", ml.current_position_formated(), "Correct last position")
+		self.assertTrue(ml.move_previous(), "Can move back")
+		self.assertEquals("2 / 3", ml.current_position_formated(), "Correct sec position")
+		self.assertTrue(ml.move_previous(), "Can move back")
+		self.assertTrue(ml.move_previous() == False, "Cannot move back")
+		
+
+class PlayerUIPresenterFixture(Fixture):
 	def run(self):
 		pass
 
@@ -1260,10 +1354,11 @@ class Fixtures(object):
 			MusicHistoryFixture(),
 			UserFixture(),
 			AudioScrobblerUserRepositoryFixture(),
-			MusicHistoryRepositoryFixture()
+			MusicHistoryRepositoryFixture(),
 			#AudioScrobblerServiceFixture(),
 			#DbHelper
 			#PlayerUI 
+			PlayerUIPresenterFixture()
 			#DirectoryNavigatorContent
 			#DirectorySelector
 		]
@@ -1282,7 +1377,7 @@ class Fixtures(object):
 if __name__ == u"__main__":
 	
 	sl = ServiceLocator()
-	ui = PlayerUI(sl.music_factory, sl.music_history, sl.as_service)
+	ui = PlayerUI(sl)
 
 	try:
 		ui.start()
