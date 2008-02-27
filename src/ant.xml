@@ -1,18 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project name="last_fm" default="deploy" basedir=".">
+<project name="last_fm" default="make_sis" basedir=".">
 
-  <property name="source_modules" value="C:\\dev\\python\\pythonenv\\MyPythonTest\\src" />
-  <property name="destiny_modules" value="C:\\Symbian\\9.3\\S60_3rd_FP2_Beta\\epoc32\\winscw\\c\\resource" />
-  
-  <property name="source_app" value="C:\\dev\\python\\pythonenv\\MyPythonTest\\src\\KenobiPlayer.py" />
-  <property name="destiny_app" value="C:\\symbian\\9.3\\s60_3rd_fp2_beta\\epoc32\\winscw\\c\\python\\KenobiPlayer.py" /> 
-  
-  <target name="deploy">
-      <copy todir="${destiny_modules}">
-          <fileset dir="${source_modules}">
-          </fileset>
-      </copy>
-      
-      <copy file="${source_app}" tofile="${destiny_app}"/>
-  </target>
+	<property name="root_dir" value="C:\dev\python\pythonenv" />
+
+
+	<property name="source_file" value="${root_dir}\src\aspyplayer.py" />
+	<property name="output_sis" value="${root_dir}\sis_files\aspyplayer_beta.sis" />
+
+	<property name="python_exec_path" value="C:\dev\tools\Python25\python.exe" />
+	<property name="ensymble_path" value="c:\dev\tools\ensymble_python2.5-0.26.py" />
+	<property name="version" value="1.0.0" />
+	<property name="uid" value="0x017051979" />
+	<property name="sis_caps" value="NetworkServices+LocalServices+ReadUserData+WriteUserData" />
+
+	<target name="make_sis">
+		<exec dir="${root_dir}" executable="${python_exec_path}">
+			<arg line="${ensymble_path} py2sis ${source_file} --uid=${uid} --version=${version} --caps=${sis_caps} ${output_sis}" />
+		</exec>
+	</target>
 </project>

@@ -747,8 +747,8 @@ class PlayerUI(object):
 		lb = self.__directory_selector.run()
 		self.__is_selecting_directory = True
 		appuifw.app.body = lb
-		appuifw.app.menu = [(u"Selecionar", self.__directory_selector.select_dir),
-							(u"Cancelar", self.cancel_select_directory)]
+		appuifw.app.menu = [(u"Select", self.__directory_selector.select_dir),
+							(u"Cancel", self.cancel_select_directory)]
 
 	def cancel_select_directory(self):
 		appuifw.app.body, appuifw.app.menu = self.__default_body
