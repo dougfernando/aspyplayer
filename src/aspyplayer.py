@@ -30,25 +30,16 @@ import socket
 ######################### MODELS 
 
 class MusicsFactory(object):
-	def __init__(self):
-		self.__all_musics = []
-	
-	# TODO: Bug Unicode error for strange files name, e.g, containing "è"
-	def load_directory_musics(self, arg, dirname, names):
-		def format_predicate(filename):
-			return filename.endswith(".mp3") or filename.endswith(".aac") 
-		
-		mp3_files = filter(format_predicate, map(unicode, names))
-
-		for name in mp3_files:
-			music_path = os.path.join(dirname, unicode(name))
-			music = Music(music_path)
-			self.__all_musics.append(music)
+	def __init__(self, file_system_services):
+		self.__fs_services = file_system_services
 		
 	def load_all_musics(self, root_path):
-		self.__all_musics = []
-		os.path.walk(root_path, self.load_directory_musics, None)
-		return self.__all_musics
+		result = []
+		files = self.__fs_services.find_all_files(root_path, ".mp3")
+		for file in files:
+			result.append(Music(file))
+		
+		return result
 
 
 class Music(object):
@@ -583,14 +574,107 @@ class AudioScrobblerService(object):
 		
 		return data
 
+
 ##########################################################
 ######################### INFRASTRUCTURE 
 
+class FileSystemServices:
+	# TODO: Bug Unicode error for strange files name, e.g, containing "è"
+	def find_all_files(self, root_dir, file_extension):
+		result = []
+		predicate = lambda f: f.endswith(file_extension)
+		
+		def walk(arg, dirname, names):
+			files_filtered = filter(predicate, names)
+			
+			for file in files_filtered:
+				full_file_path = os.path.join(dirname, unicode(file))
+				result.append(full_file_path)
+		
+		os.path.walk(root_dir, walk, None)
+		
+		return result
+
+	def exists(self, path):
+		return os.path.exists(path)
+
+	def get_base_directory(self, path):
+		return os.path.split(path)
+	
+	def base_directory_exists(self, full_path):
+		base_dir = self.get_base_directory(full_path)
+		return self.exists(base_dir)
+
+	def is_directory(self, full_path):
+		return os.path.isdir(full_path)
+	
+	def join(self, directory, file):
+		return os.path.join(directory, file)
+	
+	def get_directory_files(self, directory_path):
+		return os.listdir(directory_path)
+
+	def create_base_directories_for(self, full_path):
+		db_dir = os.path.split(self.__db_path)[0]
+		if not os.path.exists(db_dir):
+			os.makedirs(db_dir)
+
+
+class DirectoryNavigatorContent:
+	def __init__(self):
+		self.__drivelist = [u"C:", u"E:"]
+		self.__current_directory = None
+		self.__dir_list = None
+		self.__fs_services = FileSystemServices()
+	
+	def move_up(self):
+		if not self.__current_directory:
+			return
+
+		up_dir = self.__fs_services.get_base_directory(self.__current_directory)[0]
+		if up_dir != self.__current_directory:
+			self.__current_directory = up_dir
+		else:
+			self.__current_directory = None
+			
+	def move_down(self, idx):
+		if self.__current_directory:
+			if len(self.__dir_list) > 0:
+				ret = self.__fs_services.join(self.__current_directory, self.__dir_list[idx])
+			else:
+				ret = self.__current_directory
+		else:
+			ret = self.__dir_list[idx] + os.sep
+		
+		return ret
+		
+	def change_dir(self, idx):
+		self.__current_directory = self.move_down(idx)
+
+	def get_list(self):
+		self.__dir_list = None
+		
+		if not self.__current_directory:
+			entries = self.__drivelist
+			self.__dir_list = self.__drivelist
+		else:
+			is_dir = lambda n: self.__fs_services.is_directory(self.__fs_services.join(self.__current_directory, n))
+			full_directory_content = self.__fs_services.get_directory_files(self.__current_directory)
+			self.__dir_list = map(unicode, filter(is_dir, full_directory_content))
+
+			entries = self.__dir_list
+						
+		return entries
+
+	def get_current_dir(self):
+		return self.__current_directory
+
 
 class DbHelper(object):
-	def __init__(self, dbpath):
+	def __init__(self, dbpath, file_system_services):
 		self.__db_path = dbpath
-		db_already_exists = os.path.exists(self.__db_path) 
+		self.__fs_services = file_system_services
+		db_already_exists = self.__fs_services.exists(self.__db_path) 
 		
 		self.db = e32db.Dbms()
 		self.dbv = e32db.Db_view()
@@ -604,9 +688,7 @@ class DbHelper(object):
 			self.create_tables()
 
 	def check_db_directory(self):
-		db_dir = os.path.split(self.__db_path)[0]
-		if not os.path.exists(db_dir):
-			os.makedirs(db_dir)
+		self.__fs_services.create_base_directories_for(self.__db_path)
 
 	def execute_nonquery(self, sql):
 		return self.db.execute(unicode(sql))
@@ -691,7 +773,8 @@ class PlayerUI(object):
 		self.show_message("AsPy Player\nCreated by Douglas\n(doug.fernando at gmail)\n\ncode.google.com/p/aspyplayer")
 		
 	def test(self):
-		Fixtures().run()
+		if self.ask("This functionality is for testing only. It may crach the application. Continue?"):
+			Fixtures().run()
 	
 	def init_background(self):
 		self.render_initial_screen()
@@ -924,6 +1007,7 @@ class PlayerUIPresenter(object):
 	def get_current_list_position(self):
 		return self.music_list.current_position_formated()
 
+
 class DirectorySelector:
 	def __init__(self, select_action):
 		self.__navigator = DirectoryNavigatorContent()
@@ -967,54 +1051,6 @@ class DirectorySelector:
 			self.__list_box.set_list(entries)
 
 
-class DirectoryNavigatorContent:
-	def __init__(self):
-		self.__drivelist = [u"C:", u"E:"]
-		self.__current_directory = None
-		self.__dir_list = None
-	
-	def move_up(self):
-		if not self.__current_directory:
-			return
-
-		up_dir = os.path.split(self.__current_directory)[0]
-		if up_dir != self.__current_directory:
-			self.__current_directory = up_dir
-		else:
-			self.__current_directory = None
-			
-	def move_down(self, idx):
-		if self.__current_directory:
-			if len(self.__dir_list) > 0:
-				ret = os.path.join(self.__current_directory, self.__dir_list[idx])
-			else:
-				ret = self.__current_directory
-		else:
-			ret = self.__dir_list[idx] + os.sep
-		
-		return ret
-		
-	def change_dir(self, idx):
-		self.__current_directory = self.move_down(idx)
-
-	def get_list(self):
-		self.__dir_list = None
-		
-		if not self.__current_directory:
-			entries = self.__drivelist
-			self.__dir_list = self.__drivelist
-		else:
-			is_dir = lambda n: os.path.isdir(os.path.join(self.__current_directory, n))
-			self.__dir_list = map(unicode, filter(is_dir, os.listdir(self.__current_directory)))
-
-			entries = self.__dir_list
-						
-		return entries
-
-	def get_current_dir(self):
-		return self.__current_directory
-
-
 # TODO: remove the hardcoded file path
 class AccessPointServices(object):
 	def __init__(self, view, access_point_file_path="e:\\apid.txt"):
@@ -1055,14 +1091,16 @@ class AccessPointServices(object):
 
 class ServiceLocator(object):
 	def __init__(self):
-		self.db_helper = DbHelper("c:\\data\\aspyplayer\\aspyplayer.db")
+		self.file_system_services = FileSystemServices()
+		self.db_helper = DbHelper("c:\\data\\aspyplayer\\aspyplayer.db", self.file_system_services)
 		self.history_repository = MusicHistoryRepository(self.db_helper)
 		self.user_repository = AudioScrobblerUserRepository(self.db_helper)
 		self.as_service = AudioScrobblerService(self.user_repository)	
 		self.music_history = MusicHistory(self.history_repository, self.as_service)
-		self.music_factory = MusicsFactory()
+		self.music_factory = MusicsFactory(self.file_system_services)
 
 	def close(self):
+		self.file_system_services = None
 		self.db_helper = None
 		self.history_repository = None
 		self.user_repository = None
@@ -1122,10 +1160,23 @@ class MusicsFactoryFixture(Fixture):
 		mf = self.sl.music_factory
 		
 		musics = mf.load_all_musics("E:\\Music\\Bloc Party - Silent Alarm\\")
-		self.assertTrue(len(musics) == 16, "Num of musics loaded")
+		self.assertEquals(16, len(musics), "Num of musics loaded")
 		
 		musics = mf.load_all_musics("E:\\Music\\Muse - Absolution")
-		self.assertTrue(len(musics) == 14, "Num of musics loaded")
+		self.assertEquals(14, len(musics), "Num of musics loaded")
+
+class FileSystemServicesFixture(Fixture):
+	def __init__(self):
+		self.title = "File System Services tests"
+
+	def run(self):
+		fss = FileSystemServices()
+		files = fss.find_all_files("E:\\Music\\Bloc Party - Silent Alarm\\", ".mp3")
+		self.assertEquals(16, len(files), "Num of files loaded")
+		
+		files = fss.find_all_files("E:\\Music\\Muse - Absolution", ".mp3")
+		self.assertEquals(14, len(files), "Num of files loaded")
+
 
 class MusicHistoryRepositoryFixture(Fixture):		
 	def __init__(self):
@@ -1323,7 +1374,7 @@ class AudioScrobblerUserRepositoryFixture(Fixture):
 class MusicListFixture(Fixture):
 	def run(self):
 		musics = [i for i in range(3)]
-		mf = MusicsFactory()
+		mf = MusicsFactory(None)
 		mf.load_all_musics = lambda m: musics
 		
 		ml = MusicList(mf, None, None)
@@ -1358,6 +1409,7 @@ class Fixtures(object):
 			AudioScrobblerUserRepositoryFixture(),
 			MusicHistoryRepositoryFixture(),
 			#AudioScrobblerServiceFixture(),
+			FileSystemServicesFixture(),
 			#DbHelper
 			#PlayerUI 
 			PlayerUIPresenterFixture()
