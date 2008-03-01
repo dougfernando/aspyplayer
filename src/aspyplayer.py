@@ -14,7 +14,7 @@
 # limitations under the License.
 
 from random import shuffle
-from key_codes import EKeyLeftArrow, EKeyRightArrow, EKeySelect 
+from key_codes import EKeyLeftArrow, EKeyRightArrow, EKeyUpArrow, EKeyDownArrow, EKeySelect 
 
 import appuifw
 import audio
@@ -26,6 +26,7 @@ import time
 import urllib
 import socket
 import sys
+import graphics
 
 ##########################################################
 ######################### MODELS 
@@ -200,6 +201,9 @@ class MusicPlayer(object):
 			self.__player.set_volume(self.__class__.current_volume)
 
 	def is_playing(self):
+		if not self.__player: 
+			return False
+		
 		return self.__player.state() == 2
 
 	def current_volume_percentage(self):
@@ -849,12 +853,9 @@ class ScreenNavigator(object):
 		self.__artists_window = ArtistsWindow(self.__player_ui, self, self.__service_locator)
 		self.__albums_window = AlbumsWindow(self.__player_ui, self, self.__service_locator)
 		self.__musics_window = MusicsWindow(self.__player_ui, self)
-		self.__now_playing_window = NowPlayingWindow(self.__player_ui, self)
-#		self.__new_np = NewNowPlayingWindow(self.__player_ui, self)
-	
+		self.__now_playing_window = None
 	
 	def go_to_main_window(self):
-#		self.go_to(self.__new_np)
 		self.go_to(self.__main_window)
 
 	def go_to_select_window(self):
@@ -874,6 +875,9 @@ class ScreenNavigator(object):
 		self.go_to(self.__musics_window)
 
 	def go_to_now_playing(self, musics=[], index=0):
+		if not self.__now_playing_window:
+			self.__now_playing_window = NowPlayingWindow(self.__player_ui, self)
+		
 		if musics:
 			self.__now_playing_window.update_music_list(MusicList(musics, self.__now_playing_window))
 			self.__now_playing_window.music_list.set_current_index(index)
@@ -884,7 +888,9 @@ class ScreenNavigator(object):
 			self.__now_playing_window.show_message("No music selected yet")
 
 	def go_to(self, window):
-		self.__now_playing_window.is_visible = (window == self.__now_playing_window)
+		if self.__now_playing_window:
+			self.__now_playing_window.is_visible = (window == self.__now_playing_window)
+		
 		self.__as_presenter.set_view(window)
 		window.as_presenter = self.__as_presenter
 		
@@ -895,7 +901,8 @@ class ScreenNavigator(object):
 		window.show()
 
 	def close(self):
-		self.__now_playing_window.close()
+		if self.__now_playing_window:
+			self.__now_playing_window.close()
 
 class Window(object):
 	def __init__(self, player_ui, navigator, title="Audioscrobbler PyS60 Player"):
@@ -1178,48 +1185,28 @@ class AlbumsWindow(Window):
 		self.body.set_list(self.get_list_items())
 		appuifw.app.exit_key_handler = self.back
 
-class NewNowPlayingWindow(Window):
-	def __init__(self, player_ui, navigator):
-		Window.__init__(self, player_ui, navigator)
-		self.music_list = None
-		self.body = appuifw.Canvas(self.render)
-		self.render()
-
-	def render(self, coord=(100,100)):
-		self.body.rectangle((40,60,50,80),0xff0000) 
-		tr = TextRenderer(self.body)
-		tr.set_position(coord)
-		tr.render_line("Artista")
-		tr.render_line("Musica")
-		tr.render_line("Blah")
-		tr.render_line("Blah2") #u"albi9b"
-		tr.render_line("Blah3")
-		
-	def show(self):
-		appuifw.app.exit_key_handler = self.quit
-	
 class TextRenderer:
 	def __init__(self, canvas):
 		self.canvas = canvas
 		self.coords = [0,0]
 		self.spacing = 1
 
-	def set_line_spacing(self, spacing):
-		self.spacing = spacing
-
 	def set_position(self, coords):
 		self.coords = coords
+
+	def add_blank_line(self, line_height=10):
+		self.coords[1] += line_height
 
 	def move_cursor(self, x, y):
 		self.coords[0] += x
 		self.coords[1] += y
 
-	def render_string(self, text, font, fill):
+	def render_string(self, text, font=(u"normal", 16), fill=0x000000):
 		bounding, to_right, fits = self.canvas.measure_text(text, font=font)
 		self.canvas.text([self.coords[0], self.coords[1] - bounding[1]], unicode(text), font=font, fill=fill)
 		self.coords = [self.coords[0] + to_right, self.coords[1]]
 
-	def render_line(self, text, font=(u"normal", 14), fill=0xFFFFFF):
+	def render_line(self, text, font=(u"normal", 16), fill=0x000000):
 		bounding, to_right, fits = self.canvas.measure_text(text, font=font)
 
 		# canvas.text coordinates are the baseline position of the rendered
@@ -1280,16 +1267,33 @@ class NowPlayingWindow(Window):
 	def __init__(self, player_ui, navigator):
 		Window.__init__(self, player_ui, navigator)
 		self.music_list = None
-		self.body = appuifw.Text()
-		self.default_font = self.body.font 
 		self.is_visible = False
+		self.bg_img = self.load_image()
+		self.body = appuifw.Canvas(self.render) # TODO: destruir quando nao estiver visivel
 		self.presenter = None
+
+	def load_image(self):
+		possible_locations = ["E:\\python\\now_playing_bg.jpg", 
+			"E:\\private\\0F7051979\\now_playing_bg.jpg", "E:\\private\\0F7051979\\now_playing_bg.jpg"]
+		
+		for location in possible_locations:
+			if os.path.exists(location):
+				try:
+					return graphics.Image.open(location)
+				except:
+					pass
 
 	def can_be_shown(self):
 		return self.music_list
 
 	def close(self):
 		self.stop()
+
+	def render(self, coord=(100,100)):
+		if self.is_visible:
+			if self.music_list:
+				if self.music_list.current_music:
+					self.show_music_information(self.music_list.current_music)
 
 	def stop(self):
 		if self.music_list:
@@ -1302,22 +1306,26 @@ class NowPlayingWindow(Window):
 		self.presenter = NowPlayingPresenter(self, music_list)
 
 	def show_music_information(self, music):
-		t = self.body
-		t.set(u"")
-		t.font = self.default_font
-		t.color = (255, 0, 0)
-		t.style = appuifw.STYLE_BOLD
-		t.add(u"Current:\n\n")
-		t.color = 0
-		t.style = appuifw.STYLE_ITALIC | appuifw.STYLE_BOLD 
-		t.add(unicode("  Artist: %s\n" % music.artist))
-		t.add(unicode("  Track: %s\n\n" % music.title))
-		t.font = u"albi10b"
-		t.add(unicode("  Status: %s\n\n" % music.get_status_formatted()))		
-		t.add(unicode("  %s - %s\n\n" % (music.current_position_formatted(), music.length_formatted())))
-		t.font = u"albi9b"
-		t.add(unicode("  %s" % self.music_list.current_position_formated()))
+		if not self.is_visible: return
 
+		self.body.clear()
+		self.body.blit(self.bg_img)
+		
+		tr = TextRenderer(self.body)
+		tr.spacing = 6
+		tr.set_position((10,10))
+		
+		tr.render_line("Currently...", (u"normal", 18, graphics.FONT_BOLD), fill=(255, 0, 0))
+		tr.add_blank_line()
+		tr.render_line("  Artist: %s" % music.artist, (u"title", 16, graphics.FONT_BOLD))
+		tr.render_line("  Track: %s" % music.title, (u"title", 16, graphics.FONT_BOLD))
+		tr.add_blank_line()
+		tr.render_line("     %s - %s" % (music.current_position_formatted(), 
+					music.length_formatted()), (u"normal", 13, graphics.FONT_BOLD))
+		tr.render_line("     Status: %s       %s" % (music.get_status_formatted(), 
+					self.music_list.current_position_formated()), (u"normal", 13, graphics.FONT_BOLD))
+		tr.add_blank_line()
+		
 	def finished_music(self, music):
 		self.as_presenter.finished_music(music)
 		
@@ -1346,11 +1354,19 @@ class NowPlayingWindow(Window):
 		items.extend(self.basic_lastfm_menu_items())
 		items.extend(self.basic_last_menu_items())
 		return items
+
+	def bind_key_events(self):
+		self.body.bind(EKeyRightArrow, self.presenter.next)
+		self.body.bind(EKeyLeftArrow, self.presenter.previous)
+		self.body.bind(EKeyUpArrow, self.presenter.volume_up)
+		self.body.bind(EKeyDownArrow, self.presenter.volume_down)
+		self.body.bind(EKeySelect, self.presenter.play_stop)
 	
 	def show(self):
 		assert self.music_list
 		
 		self.update_menu(self.get_menu_items())
+		self.bind_key_events()
 		
 		if not self.music_list.is_playing:
 			self.presenter.play()
@@ -1370,6 +1386,13 @@ class NowPlayingPresenter(object):
 	def play(self): 
 		if not self.music_list.is_empty():
 			self.music_list.play()
+
+	def play_stop(self):
+		if self.music_list:
+			if self.music_list.current_music.is_playing():
+				self.stop()
+			else:
+				self.play()
 
 	def pause(self): 
 		if self.music_list:
@@ -1532,6 +1555,18 @@ class AccessPointServices(object):
 		except:
 			self.select_accesspoint()
 
+
+class AspyPlayerApplication(object):
+	def run(self):
+		sl = ServiceLocator()
+		ui = PlayerUI(sl)
+	
+		try:
+			ui.start()
+		finally:
+			ui.close()
+			sl.close()
+			print "bye"
 
 ##########################################################
 ######################### TESTING 
@@ -1833,20 +1868,7 @@ class Fixtures(object):
 			test.run()
 		
 		appuifw.note(unicode("All %i test suites passed!" % len(self.tests)), "info")
-
-##########################################################
-######################### MAIN 
-
-
-if __name__ == u"__main__":
+ 
+if __name__ == '__main__':
+	AspyPlayerApplication().run()
 	
-	sl = ServiceLocator()
-	ui = PlayerUI(sl)
-
-	try:
-		ui.start()
-	finally:
-		ui.close()
-		sl.close()
-		print "bye" 
-		
