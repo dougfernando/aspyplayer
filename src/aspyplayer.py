@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 from random import shuffle
 from key_codes import EKeyLeftArrow, EKeyRightArrow, EKeyUpArrow, EKeyDownArrow, EKeySelect 
 
@@ -138,6 +139,7 @@ class Music(object):
 			return "Playing"
 		
 		return "Stopped" 
+
 
 class MusicPlayer(object):
 	current_volume = -1
@@ -912,9 +914,10 @@ class Window(object):
 		self.body = None
 		self.menu = []
 		self.as_presenter = None
+		appuifw.app.screen = "normal"
 
 	def about(self):
-		self.player_ui.show_message("asPyPlayer\nCreated by Douglas\n(doug.fernando at gmail)\n\ncode.google.com/p/aspyplayer")
+		self.show_message("asPyPlayer\nCreated by Douglas\n(doug.fernando at gmail)\n\ncode.google.com/p/aspyplayer")
 
 	def show_message(self, message):
 		appuifw.note(unicode(message), "info")
@@ -932,7 +935,6 @@ class Window(object):
 		return appuifw.query(unicode(question), "query")
 
 	def show(self):
-		appuifw.app.screen = "normal"
 		appuifw.app.exit_key_handler = self.player_ui.quit
 
 	def tests(self):
@@ -1273,8 +1275,8 @@ class NowPlayingWindow(Window):
 		self.presenter = None
 
 	def load_image(self):
-		possible_locations = ["E:\\python\\now_playing_bg.jpg", 
-			"E:\\private\\0F7051979\\now_playing_bg.jpg", "E:\\private\\0F7051979\\now_playing_bg.jpg"]
+		possible_locations = ["E:\\python\\now_playing_bg.jpg", "C:\\python\\now_playing_bg.jpg"]
+		possible_locations.append(os.path.join(sys.path[0], "now_playing_bg.jpg"))
 		
 		for location in possible_locations:
 			if os.path.exists(location):
@@ -1870,5 +1872,10 @@ class Fixtures(object):
 		appuifw.note(unicode("All %i test suites passed!" % len(self.tests)), "info")
  
 if __name__ == '__main__':
-	AspyPlayerApplication().run()
+	logger = LogFactory.create_for("main")
+	try:
+		AspyPlayerApplication().run()
+	except:
+		logger.debug("General error: '%s'" % sys.exc_info())
+	
 	

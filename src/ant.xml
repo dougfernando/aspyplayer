@@ -10,18 +10,18 @@
 	<property name="python_exec_path" value="C:\dev\tools\Python25\python.exe" />
 	<property name="ensymble_path" value="c:\dev\tools\ensymble_python2.5-0.26.py" />
 	<property name="version" value="0.0.1" />
-	<property name="uid" value="0x0F7051979" />
+	<property name="uid" value="0x017051979" />
 	<property name="app_name" value="aspyplayer" />
 	<property name="sis_caps" value="NetworkServices+LocalServices+ReadUserData+WriteUserData" />
 
 	<target name="copy_source">
-		<copyfile dest="${to_pack_dir}\default.py" src="${source}\aspyplayer.py"/>
-		<copyfile dest="${to_pack_dir}\now_playing_bg.jpg" src="${source}\now_playing_bg.jpg"/>
+		<copy file="${source}\aspyplayer.py" tofile="${to_pack_dir}\default.py" overwrite="yes"/>
+		<copy file="${source}\now_playing_bg.jpg" tofile="${to_pack_dir}\now_playing_bg.jpg" overwrite="yes" />
 	</target>
 	
 	<target name="make_sis" depends="copy_source">
 		<exec dir="${root_dir}" executable="${python_exec_path}">
-			<arg line="${ensymble_path} py2sis ${to_pack_dir} --uid=${uid} --caption=${app_name} --version=${version} --caps=${sis_caps} ${output_sis}" />
+			<arg line="${ensymble_path} py2sis ${to_pack_dir} --uid=${uid} --appname=${app_name} --caption=${app_name} --version=${version} --caps=${sis_caps} ${output_sis}" />
 		</exec>
 	</target>
 </project>
