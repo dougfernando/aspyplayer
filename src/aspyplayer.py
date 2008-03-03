@@ -77,7 +77,8 @@ class Music(object):
 		return value.replace("\x00", "")
 	
 	def __str__(self):
-		return u"  Artist: %s\n  Title: %s\n  Album: %s\n  Path: %s" % (self.artist, self.title, self.album, self.file_path)
+		return u"  Artist: %s\n  Title: %s\n  Album: %s\n  Path: %s" % (
+						self.artist, self.title, self.album, self.file_path)
 
 	def play(self, callback):
 		self.player.play(callback)
@@ -109,6 +110,8 @@ class Music(object):
 		return False
 
 	def can_be_added_to_history(self):
+		if self.length == 0: return False
+
 		player_curr_pos = self.get_player_position_in_seconds()
 		min_length_cond = player_curr_pos > 30
 		min_length_played_cond = (player_curr_pos > 240 or (
@@ -122,12 +125,11 @@ class Music(object):
 	def length_formatted(self):
 		return self.format_secs_to_str(self.length)
 	
-	def format_secs_to_str(self, seconds):
-		hours = seconds / 3600
-		seconds_remaining = seconds % 3600
+	def format_secs_to_str(self, input_seconds):
+		hours = input_seconds / 3600
+		seconds_remaining = input_seconds % 3600
 		minutes = seconds_remaining / 60
-		
-		seconds = seconds % 60
+		seconds = input_seconds % 60
 
 		if hours >= 1:
 			return unicode("%02i:%02i:%02i" % (hours, minutes, seconds))
@@ -171,7 +173,7 @@ class MusicPlayer(object):
 			default_volume = self.__player.max_volume() / 4
 			self.__class__.current_volume = default_volume
 
-		self.volume_step = self.__player.max_volume() / 10 # TODO: maybe it can be a constant
+		self.volume_step = self.__player.max_volume() / 10
 		self.__player.set_volume(self.__class__.current_volume)
 		
 	def stop(self):
@@ -206,7 +208,7 @@ class MusicPlayer(object):
 		if not self.__player: 
 			return False
 		
-		return self.__player.state() == 2
+		return self.__player.state() == audio.EPlaying
 
 	def current_volume_percentage(self):
 		return int((float(self.__class__.current_volume) / self.__player.max_volume()) * 100)
@@ -215,16 +217,14 @@ class MusicPlayer(object):
 		return self.__player.current_position()
 
 
-# FIXME: This class has a bad name, it must be renamed	
 class MusicList(object):
 	def __init__(self, musics, listener, random=False):
 		self.__timer = e32.Ao_timer()
 		self.__listener = listener
 		self.__should_stop = False
 		self.__current_index = 0
-		self.is_playing = False
-		
 		self.__musics = musics
+		self.is_playing = False
 
 		if self.__musics:
 			if random: 
@@ -236,6 +236,9 @@ class MusicList(object):
 	
 	def is_empty(self):
 		return len(self.__musics) < 1
+
+	def __len__(self):
+		return len(self.__musics)
 	
 	def play(self):
 		self.__should_stop = False
@@ -250,7 +253,7 @@ class MusicList(object):
 			if self.__should_stop: break
 			if not self.move_next(): break
 			
-			self.__timer.after(0.3)
+			self.__timer.after(0.3) # time between the musics
 	
 		self.is_playing = False
 	
@@ -273,7 +276,6 @@ class MusicList(object):
 
 		self.__listener.finished_music(self.current_music)
 
-	
 	def play_callback(self, current, previous, err):
 		pass
 		
@@ -334,6 +336,7 @@ class MusicHistory(object):
 		if musics and len(musics) < self.__batch_size:
 			if self.__audio_scrobbler_service.send(musics):
 				self.clear()
+				
 		elif musics:
 			self.send_batches_to_audioscrobbler(musics)
 
@@ -565,7 +568,6 @@ class AudioScrobblerService(object):
    		
    		self.__handshake_data = urllib.urlencode(values)
 
-	# TODO: consider the time to retry if failed
 	def login(self):
 		try:
 			self.create_handshake_data()
@@ -574,8 +576,11 @@ class AudioScrobblerService(object):
 			self.__session_id, self.__now_url, self.__post_url = as_response_data
 			self.__logger.debug("Login was OK: ID %s, NowUrl %s, PostUrl %s" % (as_response_data))
 			self.logged = True
+		except NoAudioScrobblerUserError: 
+			self.logged = False
+			raise
 		except:
-			self.__logger.debug("Login error: '%s'" % sys.exc_info())
+			self.__logger.debug("Login error: '%s'" % ''.join(traceback.format_exception(*sys.exc_info())))
 			self.logged = False
 			raise
 		
@@ -629,7 +634,7 @@ class AudioScrobblerService(object):
 			elif result.strip() == "BADSESSION":
 				raise AudioScrobblerError("Invalid session")
 		except:
-			self.__logger.debug("Now playing error: '%s'" % sys.exc_info())
+			self.__logger.debug("Now playing error: '%s'" % ''.join(traceback.format_exception(*sys.exc_info())))
 		
 		return False
 	
@@ -647,7 +652,7 @@ class AudioScrobblerService(object):
 			elif result_value.startswith("FAILED"):
 				raise AudioScrobblerError("Submission to AS failed. Reason: %s" % result_value)
 		except:
-			self.__logger.debug("Scrobbling error: '%s'" % sys.exc_info())
+			self.__logger.debug("Scrobbling error: '%s'" % ''.join(traceback.format_exception(*sys.exc_info())))
 
 		return False
 
@@ -731,7 +736,6 @@ class ServiceLocator(object):
 		self.music_factory = None
 
 class FileSystemServices:
-	# TODO: Bug Unicode error for strange files name, e.g, containing "è"
 	def find_all_files(self, root_dir, file_extension):
 		result = []
 		predicate = lambda f: f.endswith(file_extension)
@@ -754,6 +758,14 @@ class FileSystemServices:
 		dir = os.path.split(full_path)[0]
 		if not os.path.exists(dir):
 			os.makedirs(dir)
+
+	def get_all_music_files_path_in_device(self):
+		all_musics_in_c = self.find_all_files("C:\\", ".mp3")
+		all_musics_in_e = self.find_all_files("E:\\", ".mp3")
+		all_music = []
+		all_music.extend(all_musics_in_c)
+		all_music.extend(all_musics_in_e)
+		return all_music
 
 class DbHelper(object):
 	def __init__(self, dbpath, file_system_services):
@@ -848,7 +860,9 @@ class ScreenNavigator(object):
 	def __init__(self, player_ui, service_locator):
 		self.__player_ui = player_ui
 		self.__service_locator = service_locator
-		self.__as_presenter = AudioScrobblerPresenter(service_locator)
+		self.__as_presenter = AudioScrobblerPresenter(self.__service_locator)
+		
+		# Application screens
 		self.__main_window = MainWindow(self.__player_ui, self, self.__service_locator)
 		self.__select_window = SelectWindow(self.__player_ui, self, self.__service_locator)
 		self.__all_musics_window = AllMusicsWindow(self.__player_ui, self, self.__service_locator)
@@ -879,15 +893,17 @@ class ScreenNavigator(object):
 	def go_to_now_playing(self, musics=[], index=0):
 		if not self.__now_playing_window:
 			self.__now_playing_window = NowPlayingWindow(self.__player_ui, self)
-		
+		elif not musics:
+			if self.__now_playing_window.can_be_shown():
+				self.go_to(self.__now_playing_window)
+			else:
+				self.__now_playing_window.show_message("No music selected yet")
+
 		if musics:
-			self.__now_playing_window.update_music_list(MusicList(musics, self.__now_playing_window))
+			music_list = MusicList(musics, self.__now_playing_window)
+			self.__now_playing_window.update_music_list(music_list)
 			self.__now_playing_window.music_list.set_current_index(index)
-		
-		if self.__now_playing_window.can_be_shown():
 			self.go_to(self.__now_playing_window)
-		else:
-			self.__now_playing_window.show_message("No music selected yet")
 
 	def go_to(self, window):
 		if self.__now_playing_window:
@@ -905,6 +921,7 @@ class ScreenNavigator(object):
 	def close(self):
 		if self.__now_playing_window:
 			self.__now_playing_window.close()
+
 
 class Window(object):
 	def __init__(self, player_ui, navigator, title="Audioscrobbler PyS60 Player"):
@@ -996,12 +1013,7 @@ class MainWindow(Window):
 		self.show_message("Library updated. Added: %i, Deleted: %i" % result)
 	
 	def get_all_music_files_path(self):
-		all_musics_in_c = self.__fs_services.find_all_files("C:\\", ".mp3")
-		all_musics_in_e = self.__fs_services.find_all_files("E:\\", ".mp3")
-		all_music = []
-		all_music.extend(all_musics_in_c)
-		all_music.extend(all_musics_in_e)
-		return all_music
+		return self.__fs_services.get_all_music_files_path_in_device()
 	
 	def get_menu_items(self):
 		items = [
@@ -1142,6 +1154,7 @@ class ArtistsWindow(Window):
 		index = self.body.current()
 		artist_selected = self.artists[index]
 		musics = self.__music_repository.find_all_by_artist(artist_selected)
+		assert musics
 		self.navigator.go_to_musics(musics)
 
 	def show(self):
@@ -1181,88 +1194,12 @@ class AlbumsWindow(Window):
 		index = self.body.current()
 		album_selected = self.albums[index]
 		musics = self.__music_repository.find_all_by_album(album_selected)
+		assert musics
 		self.navigator.go_to_musics(musics)
 
 	def show(self):
 		self.body.set_list(self.get_list_items())
 		appuifw.app.exit_key_handler = self.back
-
-class TextRenderer:
-	def __init__(self, canvas):
-		self.canvas = canvas
-		self.coords = [0,0]
-		self.spacing = 1
-
-	def set_position(self, coords):
-		self.coords = coords
-
-	def add_blank_line(self, line_height=10):
-		self.coords[1] += line_height
-
-	def move_cursor(self, x, y):
-		self.coords[0] += x
-		self.coords[1] += y
-
-	def render_string(self, text, font=(u"normal", 16), fill=0x000000):
-		bounding, to_right, fits = self.canvas.measure_text(text, font=font)
-		self.canvas.text([self.coords[0], self.coords[1] - bounding[1]], unicode(text), font=font, fill=fill)
-		self.coords = [self.coords[0] + to_right, self.coords[1]]
-
-	def render_line(self, text, font=(u"normal", 16), fill=0x000000):
-		bounding, to_right, fits = self.canvas.measure_text(text, font=font)
-
-		# canvas.text coordinates are the baseline position of the rendered
-		# text. It's not top left position.
-		self.canvas.text([self.coords[0], self.coords[1] - bounding[1]], unicode(text), font=font, fill=fill)
-
-		# Move cursor one line below
-		self.coords = [self.coords[0],
-					self.coords[1] - bounding[1] + bounding[3] + self.spacing
-					]
-
-	def chop(self, text, font, width):
-		lines = []
-
-		# Paragraph yet to be chopped
-		text_left = text
-
-		while len(text_left) > 0:
-			bounding, to_right, fits = self.canvas.measure_text(
-					text_left, font=font,
-					maxwidth=width, maxadvance=width)
-
-			if fits <= 0:
-				lines.append(text_left)
-				break
-
-			#print "tor:" + str(to_right) + " fits:" + str(fits)
-			slice = text_left[0:fits]
-
-			# How many chars we can skip at the end of the row
-			# (whitespaces at the end of the row)
-			adjust = 0
-
-			if len(slice) < len(text_left):
-				# Use the last space as a break point
-				rindex = slice.rfind(" ")
-				if rindex > 0:
-					adjust = 1
-					slice = slice[0:rindex]
-
-			lines.append(slice)
-			text_left = text_left[len(slice)+adjust:]
-
-		return lines
-
-	def render(self, text, font=(u"normal", 14), fill=0x000000):
-		text = unicode(text)
-		max_width = self.canvas.size[0] - self.coords[0]
-		#print "Max width: " + str(max_width)
-		lines = text.split("\n")
-		for line in lines:
-			chopped_lines = self.chop(line, font, max_width)
-			for chopped_line in chopped_lines:
-				self.render_line(chopped_line, font, fill)
 
 
 class NowPlayingWindow(Window):
@@ -1292,10 +1229,9 @@ class NowPlayingWindow(Window):
 		self.stop()
 
 	def render(self, coord=(100,100)):
-		if self.is_visible:
-			if self.music_list:
-				if self.music_list.current_music:
-					self.show_music_information(self.music_list.current_music)
+		if self.is_visible and self.music_list:
+			if self.music_list.current_music:
+				self.show_music_information(self.music_list.current_music)
 
 	def stop(self):
 		if self.music_list:
@@ -1365,8 +1301,7 @@ class NowPlayingWindow(Window):
 		self.body.bind(EKeySelect, self.presenter.play_stop)
 	
 	def show(self):
-		assert self.music_list
-		
+		appuifw.app.exit_key_handler = self.back
 		self.update_menu(self.get_menu_items())
 		self.bind_key_events()
 		
@@ -1374,7 +1309,7 @@ class NowPlayingWindow(Window):
 			self.presenter.play()
 
 		self.show_music_information(self.music_list.current_music)
-		appuifw.app.exit_key_handler = self.back
+
 		
 
 class NowPlayingPresenter(object):
@@ -1468,8 +1403,9 @@ class AudioScrobblerPresenter(object):
 			return True
 		except AudioScrobblerCredentialsError:
 			self.view.show_error_message("Bad Username/Password. Change your credentials")
+		except NoAudioScrobblerUserError: raise
 		except:
-			self.view.show_error_message("It was not possible to log in")
+			self.view.show_error_message("It was not possible to log in.")
 
 		return False
 	
@@ -1514,7 +1450,33 @@ class AudioScrobblerPresenter(object):
 				if self.__now_playing_error_counter % 5 == 0:
 					self.view.show_message("It was not possible to send now playing to Last.fm")
 
-# TODO: remove the hardcoded file path
+
+class TextRenderer:
+	def __init__(self, canvas):
+		self.canvas = canvas
+		self.coords = [0,0]
+		self.spacing = 1
+
+	def set_position(self, coords):
+		self.coords = coords
+
+	def add_blank_line(self, line_height=10):
+		self.coords[1] += line_height
+
+	def move_cursor(self, x, y):
+		self.coords[0] += x
+		self.coords[1] += y
+
+	def render_line(self, text, font=(u"normal", 16), fill=0x000000):
+		bounding, to_right, fits = self.canvas.measure_text(text, font=font)
+
+		self.canvas.text([self.coords[0], self.coords[1] - bounding[1]], 
+										unicode(text), font=font, fill=fill)
+
+		self.coords = [self.coords[0],
+					self.coords[1] - bounding[1] + bounding[3] + self.spacing]
+
+
 class AccessPointServices(object):
 	def __init__(self, view, access_point_file_path="e:\\apid.txt"):
 		self.__view = view
@@ -1828,10 +1790,8 @@ class AudioScrobblerUserRepositoryFixture(Fixture):
 class MusicListFixture(Fixture):
 	def run(self):
 		musics = [i for i in range(3)]
-		mf = MusicsFactory(None)
-		mf.load_all_musics = lambda m: musics
 		
-		ml = MusicList(mf, None, None)
+		ml = MusicList(musics, None, None)
 		
 		self.assertEquals("1 / 3", ml.current_position_formated(), "Correct first position")
 		self.assertTrue(ml.move_previous() == False, "Cannot move back from start")
@@ -1871,11 +1831,15 @@ class Fixtures(object):
 		
 		appuifw.note(unicode("All %i test suites passed!" % len(self.tests)), "info")
  
+
+##########################################################
+######################### PROGRAM ENTRY POINT  
+ 
 if __name__ == '__main__':
 	logger = LogFactory.create_for("main")
 	try:
 		AspyPlayerApplication().run()
 	except:
-		logger.debug("General error: '%s'" % sys.exc_info())
+		logger.debug("General error: '%s'" % ''.join(traceback.format_exception(*sys.exc_info())))
 	
 	
