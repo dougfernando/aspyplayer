@@ -1810,7 +1810,6 @@ class MusicListFixture(Fixture):
 class Fixtures(object):
 	def __init__(self):
 		self.tests = [
-			MusicsFactoryFixture(),
 			MusicFixture(),
 			MusicPlayerFixture(),
 			MusicListFixture(),
