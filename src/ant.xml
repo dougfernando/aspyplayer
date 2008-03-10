@@ -9,9 +9,10 @@
 
 	<property name="python_exec_path" value="C:\dev\tools\Python25\python.exe" />
 	<property name="ensymble_path" value="c:\dev\tools\ensymble_python2.5-0.26.py" />
-	<property name="version" value="0.0.1" />
+	<property name="version" value="0.1.3" />
 	<property name="uid" value="0x017051979" />
 	<property name="app_name" value="aspyplayer" />
+	<property name="app_icon" value="${source}\logo.svg" />
 	<property name="sis_caps" value="NetworkServices+LocalServices+ReadUserData+WriteUserData" />
 
 	<target name="copy_source">
@@ -21,7 +22,7 @@
 	
 	<target name="make_sis" depends="copy_source">
 		<exec dir="${root_dir}" executable="${python_exec_path}">
-			<arg line="${ensymble_path} py2sis ${to_pack_dir} --uid=${uid} --appname=${app_name} --caption=${app_name} --version=${version} --caps=${sis_caps} ${output_sis}" />
+			<arg line="${ensymble_path} py2sis ${to_pack_dir} --uid=${uid} --appname=${app_name} --caption=${app_name} --version=${version} --icon=${app_icon} --caps=${sis_caps} ${output_sis}" />
 		</exec>
 	</target>
 </project>
