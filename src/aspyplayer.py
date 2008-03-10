@@ -35,7 +35,7 @@ import graphics
 
 class Music(object):
 	def __init__(self, file_path=""):
-		self.file_path = file_path;
+		self.file_path = UnicodeHelper.safe_unicode(file_path);
 		self.init_music()
 		self.player = MusicPlayer(self)
 		self.length = 0
@@ -47,24 +47,24 @@ class Music(object):
 	
 	def init_music(self):
 		if self.file_path:
-			path = self.file_path
+			path = self.file_path.encode("utf8")
 			fp = open(path, "r")
 			fp.seek(-128, 2)
 			fp.read(3)
 	
-			self.title = self.remove_X00(fp.read(30))
+			self.title = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
 			if not self.title: 
 				if len(self.file_path) > 18:
-					self.title = "..." + self.file_path[-18:]
+					self.title = UnicodeHelper.safe_unicode("..." + self.file_path[-18:])
 				else:
-					self.title = self.file_path
+					self.title = UnicodeHelper.safe_unicode(self.file_path)
 			
-			self.artist = self.remove_X00(fp.read(30))
-			if not self.artist: self.artist = "Unknow"
-			self.album = self.remove_X00(fp.read(30))
-			if not self.album: self.album = "Unknow"
-			self.year = self.remove_X00(fp.read(4))
-			self.comment = self.remove_X00(fp.read(28))
+			self.artist = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
+			if not self.artist: self.artist = u"Unknow"
+			self.album = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
+			if not self.album: self.album = u"Unknow"
+			self.year = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(4)))
+			self.comment = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(28)))
 	
 			fp.close()
 		else:
@@ -396,6 +396,9 @@ class MusicRepository(object):
 	def __init__(self, db_helper):
 		self.__db_helper = db_helper
 
+	def exists(self, path):
+		return os.path.exists(path.encode("utf8"))
+
 	def distinct(self, collection):
 		result = []
 		for item in collection:
@@ -418,9 +421,15 @@ class MusicRepository(object):
 	def find_all(self):
 		cmd = "SELECT Path FROM Music"
 		rows = self.__db_helper.execute_reader(cmd)
-		result = [Music(row[0]) for row in rows]
+		result = [Music(row[0]) for row in rows if self.exists(row[0])]
 		return self.distinct(result)
-	
+
+	def find_all_musics_path(self):
+		cmd = "SELECT Path FROM Music"
+		rows = self.__db_helper.execute_reader(cmd)
+		result = [row[0] for row in rows]
+		return self.distinct(result)
+
 	def find_all_artists(self):
 		cmd = "SELECT Artist FROM Music"
 		rows = self.__db_helper.execute_reader(cmd)
@@ -443,19 +452,19 @@ class MusicRepository(object):
 		cmd = "SELECT Path FROM Music WHERE Album = '%s' AND Artist = '%s'" % (
 										album.replace("'", "''"), artist.replace("'", "''"))
 		rows = self.__db_helper.execute_reader(cmd)
-		result = [Music(row[0]) for row in rows]
+		result = [Music(row[0]) for row in rows if self.exists(row[0])]
 		return result
 	
 	def find_all_by_artist(self, artist):
 		cmd = "SELECT Path FROM Music WHERE Artist = '%s'" % artist.replace("'", "''")
 		rows = self.__db_helper.execute_reader(cmd)
-		result = [Music(row[0]) for row in rows]
+		result = [Music(row[0]) for row in rows if self.exists(row[0])]
 		return result
 
 	def find_all_by_album(self, album):
 		cmd = "SELECT Path FROM Music WHERE Album = '%s'" % album.replace("'", "''")
 		rows = self.__db_helper.execute_reader(cmd)
-		result = [Music(row[0]) for row in rows]
+		result = [Music(row[0]) for row in rows if self.exists(row[0])]
 		return result
 
 	def save(self, music):
@@ -470,8 +479,8 @@ class MusicRepository(object):
 		assert result > 0
 
 	def update_library(self, musics_path):
-		all_music_in_db = self.find_all()
-		all_music_in_db_path = [music.file_path for music in all_music_in_db]
+		all_music_in_db = self.find_all_musics_path()
+		all_music_in_db_path = [music_file_path for music_file_path in all_music_in_db]
 		
 		to_be_added = [x for x in musics_path if x not in all_music_in_db_path]
 		to_be_deleted = [x for x in all_music_in_db_path if x not in musics_path]
@@ -795,6 +804,24 @@ class AudioScrobblerService(object):
 ##########################################################
 ######################### INFRASTRUCTURE 
 
+class UnicodeHelper(object):
+	def safe_unicode(value):
+		if type(value) == type(unicode("unicode")):
+			return value
+
+		result = ""
+		for enc in ['utf8', 'latin1']:
+			try:
+				result = value.decode(enc)
+				break
+			except UnicodeError:
+				pass
+			
+		return unicode(result)
+	
+	safe_unicode = staticmethod(safe_unicode)
+
+
 class LogFactory(object):
 	def create_for(name):
 		logger = Logger(str(name), "c:\\data\\aspyplayer\\log.txt") 
@@ -848,10 +875,10 @@ class FileSystemServices:
 		predicate = lambda f: f.endswith(file_extension)
 		
 		def walk(arg, dirname, names):
-			files_filtered = filter(predicate, names)
+			files_filtered = filter(predicate, map(UnicodeHelper.safe_unicode, names))
 			
 			for file in files_filtered:
-				full_file_path = "%s\\%s" %(dirname, file.decode('utf-8'))
+				full_file_path = "%s\\%s" %(dirname, file)
 				result.append(full_file_path)
 		
 		os.path.walk(root_dir, walk, None)
@@ -1054,7 +1081,7 @@ class ScreenNavigator(object):
 
 
 class Window(object):
-	def __init__(self, player_ui, navigator, title="Audioscrobbler PyS60 Player"):
+	def __init__(self, player_ui, navigator, title="ASPY Player"):
 		self.player_ui = player_ui
 		self.navigator = navigator
 		self.title = unicode(title)
@@ -1064,7 +1091,7 @@ class Window(object):
 		appuifw.app.screen = "normal"
 
 	def about(self):
-		self.show_message("asPyPlayer\nCreated by Douglas\n(doug.fernando at gmail)\n\ncode.google.com/p/aspyplayer")
+		self.show_message("ASPY Player\nCreated by Douglas\n(doug.fernando at gmail)\n\naspyplayer.googlecode.com")
 
 	def show_message(self, message):
 		appuifw.note(unicode(message), "info")
@@ -1131,8 +1158,8 @@ class MainWindow(Window):
 			self.about()
 	
 	def get_list_items(self):
-		items = [(u"Your Musics", unicode("%i musics" % self.__music_repository.count_all())), 
-				(u"About", u"code.google.com/p/aspyplayer/")]
+		items = [(u"Musics", unicode("%i musics" % self.__music_repository.count_all())), 
+				(u"About", u"aspyplayer.googlecode.com")]
 		
 		return items
 	
@@ -1147,7 +1174,7 @@ class MainWindow(Window):
 	
 	def get_menu_items(self):
 		items = [
-			(u"Update Musics Library", self.update_music_library),
+			(u"Update Music Library", self.update_music_library),
 			(u"Now playing", self.navigator.go_to_now_playing)]
 		items.extend(self.basic_lastfm_menu_items())
 		items.extend(self.basic_last_menu_items())
@@ -1633,9 +1660,10 @@ class AudioScrobblerPresenter(object):
 		if self.is_online():
 			if not self.__audio_scrobbler_service.now_playing(music):
 				self.__now_playing_error_counter += 1
-				if self.__now_playing_error_counter % 1 == 0:
+				if self.__now_playing_error_counter % 60 == 0:
 					self.view.show_message("It was not possible to send now playing to Last.fm")
-
+			else:
+				self.__now_playing_error_counter = 0
 
 class TextRenderer:
 	def __init__(self, canvas):
@@ -2028,17 +2056,23 @@ class HardErrorControllerFixture(Fixture):
 		hec.handle_hard_error()
 		self.assertTrue(l, "New handshake required")
 
-class UnicodeFixture(Fixture):
+class UnicodeHelperFixture(Fixture):
 	def __init__(self):
 		Fixture.__init__(self)
 	
 	def run(self):
-		input_a = "È„„ËÓ"
-		try: 
-			unicode(input_a)
-			assert False
-		except: pass
-
+		input_a = "E:\\Music\\Testing\\LÍusy Reputation.mp3"
+		val = UnicodeHelper.safe_unicode(input_a)
+		valx = UnicodeHelper.safe_unicode(val)
+		print val
+		f = open(val.encode("utf8"))
+		f.close()
+		
+		input_b = "E:\\Music\\Bloc Party - Silent Alarm\\01 - Like Eating Glass.mp3"
+		val = UnicodeHelper.safe_unicode(input_b)
+		f = open(val.encode("utf8"))
+		f.close()
+		
 			
 
 class Fixtures(object):
@@ -2055,7 +2089,8 @@ class Fixtures(object):
 			FileSystemServicesFixture(),
 			#DbHelper
 			#PlayerUI,
-			HardErrorControllerFixture()
+			HardErrorControllerFixture(),
+			UnicodeHelperFixture()
 		]
 		
 	
