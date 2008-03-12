@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.0.3 beta"
+__version__ = "0.1.3 beta"
 
 from random import shuffle
 from key_codes import EKeyLeftArrow, EKeyRightArrow, EKeyUpArrow, EKeyDownArrow, EKeySelect 
@@ -60,9 +60,13 @@ class Music(object):
 					self.title = UnicodeHelper.safe_unicode(self.file_path)
 			
 			self.artist = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
-			if not self.artist: self.artist = u"Unknow"
+			if not self.artist: 
+				self.artist = u"Unknow"
+			
 			self.album = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
-			if not self.album: self.album = u"Unknow"
+			if not self.album: 
+				self.album = u"Unknow"
+			
 			self.year = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(4)))
 			self.comment = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(28)))
 	
@@ -146,6 +150,12 @@ class Music(object):
 		
 		return "Stopped" 
 
+	def played_at_formatted(self):
+		ts = time.gmtime(self.played_at)
+		return unicode(time.strftime("%b/%d %H:%M", ts))
+
+	def artist_played_at_formatted(self):
+		return u"%s - %s" % (self.played_at_formatted(), self.artist)
 
 class MusicPlayer(object):
 	current_volume = -1
@@ -153,11 +163,11 @@ class MusicPlayer(object):
 	def __init__(self, music, player=None):
 		self.__music = music
 		self.__paused = False
-		self.loaded = False
 		self.__player = player
 		self.__current_position = None
-		self.volume_step = 1
 		self.__loading = False
+		self.loaded = False
+		self.volume_step = 1
 	
 	def play(self, callback=None):
 		if not self.__paused:
@@ -235,7 +245,8 @@ class MusicList(object):
 		self.__current_index = 0
 		self.__musics = musics
 		self.is_playing = False
-
+		self.is_new = True
+		
 		if self.__musics:
 			if random: 
 				shuffle(self.__musics)
@@ -252,6 +263,7 @@ class MusicList(object):
 	
 	def play(self):
 		self.__should_stop = False
+		self.is_new = False
 		
 		while self.current_music != None:
 			self.current_music.play(self.play_callback)
@@ -354,10 +366,10 @@ class MusicHistory(object):
 	
 	def send_to_audioscrobbler(self):
 		musics = self.__repository.load_all_history()
+		musics.sort(lambda m1, m2: cmp(m1.played_at, m2.played_at))
 		if musics and len(musics) < self.__batch_size:
 			if self.__audio_scrobbler_service.send(musics):
 				self.clear()
-				
 		elif musics:
 			self.send_batches_to_audioscrobbler(musics)
 
@@ -468,8 +480,9 @@ class MusicRepository(object):
 		return result
 
 	def save(self, music):
-		cmd = "INSERT INTO Music (Path, Artist, Album) VALUES('%s', '%s', '%s')" % (music.file_path.replace("'", "''"),
-								music.artist.replace("'", "''"), music.album.replace("'", "''"))
+		cmd = "INSERT INTO Music (Path, Artist, Album) VALUES('%s', '%s', '%s')" % (
+			music.file_path.replace("'", "''"),	music.artist.replace("'", "''"), 
+			music.album.replace("'", "''"))
 		result = self.__db_helper.execute_nonquery(cmd)
 		assert result > 0
 
@@ -516,7 +529,8 @@ class AudioScrobblerUserRepository(object):
 	
 	def save(self, user):
 		remove_cmd = "DELETE FROM User"
-		insert_cmd = "INSERT INTO User (UserName, Password) VALUES('%s', '%s')" % (user.username.replace("'", "''"), user.password.replace("'", "''"))
+		insert_cmd = "INSERT INTO User (UserName, Password) VALUES('%s', '%s')" % (
+					user.username.replace("'", "''"), user.password.replace("'", "''"))
 
 		result = self.__db_helper.execute_nonquery(remove_cmd)
 		result = self.__db_helper.execute_nonquery(insert_cmd)
@@ -563,6 +577,7 @@ class MusicHistoryRepository(object):
 ##########################################################
 ######################### SERVICES 
 
+# TODO: Test this exception handling
 class AudioScrobblerWaitError(Exception):
 	pass
 
@@ -636,17 +651,24 @@ class AudioScrobblerService(object):
 		self.__handshake_url = "http://post.audioscrobbler.com/"
 		self.__user_repository = user_repository
 		self.__logger = LogFactory.create_for(self.__class__.__name__)
-		self.logged = False
 		self.__session_id = None
 		self.__now_url = None
 		self.__post_url = None
 		self.__hard_error_controller = HardErrorController(self.force_disconnect)
+		self.logged = False
 	
 	def force_disconnect(self):
 		self.logged = False
 	
 	def set_credentials(self, user):
 		self.__user_repository.save(user)
+	
+	def user_changed(self, username):
+		user = self.__user_repository.load()
+		if user:
+			return user.username != username
+		
+		return False
 		
 	def create_handshake_data(self):
 		user = self.__user_repository.load()
@@ -682,13 +704,15 @@ class AudioScrobblerService(object):
 			self.__session_id, self.__now_url, self.__post_url = as_response_data
 			self.logged = True
 			self.__hard_error_controller.logging_sucessful()
-			self.__logger.debug("Login was OK: ID %s, NowUrl %s, PostUrl %s" % (as_response_data))
+			self.__logger.debug("Login was OK: ID %s, NowUrl %s, PostUrl %s" % (
+																as_response_data))
 		except NoAudioScrobblerUserError: raise
 		except AudioScrobblerError: raise
 		except AudioScrobblerCredentialsError: raise
 		except:
 			self.__hard_error_controller.handle_hard_error(True)
-			self.__logger.debug("Login error: '%s'" % ''.join(traceback.format_exception(*sys.exc_info())))
+			self.__logger.debug("Login error: '%s'" % \
+							''.join(traceback.format_exception(*sys.exc_info())))
 			raise
 		
 	def handle_handshake_response(self, response):
@@ -744,7 +768,8 @@ class AudioScrobblerService(object):
 				self.__hard_error_controller.force_new_handshake()
 		except:
 			self.__hard_error_controller.handle_hard_error()
-			self.__logger.debug("Now playing error: '%s'" % ''.join(traceback.format_exception(*sys.exc_info())))
+			self.__logger.debug("Now playing error: '%s'" % \
+							''.join(traceback.format_exception(*sys.exc_info())))
 		
 		return False
 	
@@ -768,7 +793,8 @@ class AudioScrobblerService(object):
 				raise AudioScrobblerError("Submission to AS failed. Reason: %s" % result_value)
 		except:
 			self.__hard_error_controller.handle_hard_error()
-			self.__logger.debug("Scrobbling error: '%s'" % ''.join(traceback.format_exception(*sys.exc_info())))
+			self.__logger.debug("Scrobbling error: '%s'" % \
+							 ''.join(traceback.format_exception(*sys.exc_info())))
 
 		return False
 
@@ -1006,13 +1032,17 @@ class ScreenNavigator(object):
 		self.__albums_window = AlbumsWindow(self.__player_ui, self, self.__service_locator)
 		self.__musics_window = MusicsWindow(self.__player_ui, self)
 		self.__artist_musics_window = ArtistMusicsWindow(self.__player_ui, self, self.__service_locator)
+		self.__current_history_window = CurrentHistoryWindow(self.__player_ui, self, self.__service_locator)
 		self.__now_playing_window = None
 
 	def go_to_last(self):
-		assert self.__last_window != self.__now_playing_window
-		
-		if self.__last_window != None:
+		if self.__last_window == self.__now_playing_window:
+			self.go_to_now_playing()
+		elif self.__last_window != None:
 			self.go_to(self.__last_window)
+	
+	def go_to_current_history(self):
+		self.go_to(self.__current_history_window)
 	
 	def go_to_artist_musics(self, artist=None):
 		if not artist:
@@ -1046,18 +1076,19 @@ class ScreenNavigator(object):
 		self.go_to(self.__musics_window)
 
 	def go_to_now_playing(self, musics=[], index=0):
+		if not self.__now_playing_window and not musics:
+			Window.static_show_message("No music selected yet")
+			return
+		
 		if not self.__now_playing_window:
 			self.__now_playing_window = NowPlayingWindow(self.__player_ui, self)
-		elif not musics:
-			if self.__now_playing_window.can_be_shown():
-				self.go_to(self.__now_playing_window)
-			else:
-				self.__now_playing_window.show_message("No music selected yet")
 
 		if musics:
 			music_list = MusicList(musics, self.__now_playing_window)
 			self.__now_playing_window.update_music_list(music_list)
 			self.__now_playing_window.music_list.set_current_index(index)
+			self.go_to(self.__now_playing_window)
+		else:
 			self.go_to(self.__now_playing_window)
 
 	def go_to(self, window):
@@ -1090,6 +1121,11 @@ class Window(object):
 		self.as_presenter = None
 		appuifw.app.screen = "normal"
 
+	def static_show_message(message):
+		appuifw.note(unicode(message), "info")
+		
+	static_show_message = staticmethod(static_show_message)
+	
 	def about(self):
 		self.show_message("ASPY Player\nCreated by Douglas\n(doug.fernando at gmail)\n\naspyplayer.googlecode.com")
 
@@ -1105,14 +1141,14 @@ class Window(object):
 	def ask_password(self, info):
 		return appuifw.query(unicode(info), "code")
 
-	def ask(self, question):
+	def confirm(self, question):
 		return appuifw.query(unicode(question), "query")
 
 	def show(self):
 		appuifw.app.exit_key_handler = self.player_ui.quit
 
 	def tests(self):
-		if self.ask("For development purposes only. It may crash the application. Continue?"):
+		if self.confirm("For development purposes only. It may crash the application. Continue?"):
 			Fixtures().run()
 
 	def basic_lastfm_menu_items(self):
@@ -1121,6 +1157,7 @@ class Window(object):
 				(u"Connect", self.as_presenter.connect), 
 				(u"Clear History", self.as_presenter.clear_as_db), 
 				(u"Submit History", self.as_presenter.send_history),
+				(u"Show History", self.navigator.go_to_current_history),
 				(u"Set Credentials", self.as_presenter.create_as_credentials)))]
 
 	def basic_last_menu_items(self):
@@ -1139,7 +1176,7 @@ class Window(object):
 		self.menu.extend(new_menu)
 
 	def quit(self):
-		if self.ask("Are you sure you want to exit the application?"):
+		if self.confirm("Are you sure you want to exit the application?"):
 			self.player_ui.quit()
 
 	
@@ -1237,15 +1274,11 @@ class MusicsWindow(Window):
 
 	def get_list_items(self):
 		list_items = []
-		bad_musics = []
+		
+		self.musics.sort(lambda m1, m2: cmp(m1.title.upper(), m2.title.upper()))
 		i = 1
 		for music in self.musics:
-			try:
-				title = unicode(music.title)
-				list_items.append(u"%i-%s" % (i, title))
-			except:
-				bad_musics.append(music)
-			i += 1
+			list_items.append(u"%i-%s" % (i, music.title))
 		
 		return list_items
 	
@@ -1507,10 +1540,45 @@ class NowPlayingWindow(Window):
 		self.update_menu(self.get_menu_items())
 		self.bind_key_events()
 		
-		if not self.music_list.is_playing:
+		if self.music_list.is_new:
 			self.presenter.play()
 
 		self.show_music_information(self.music_list.current_music)
+
+class CurrentHistoryWindow(Window):
+	def __init__(self, player_ui, navigator, service_locator):
+		Window.__init__(self, player_ui, navigator)
+		self.__music_history_repository = service_locator.history_repository
+		self.body = appuifw.Listbox([(u"empty", u"empty")], self.go_to)
+		self.menu = self.get_menu_items()
+
+	def get_list_items(self):
+		self.history = self.__music_history_repository.load_all_history()
+		if not self.history:
+			return [(u"empty", u"empty")]
+		
+		self.history.sort(lambda m1, m2: cmp(m1.played_at, m2.played_at))
+		
+		return map(lambda m: (m.title, m.artist_played_at_formatted()), self.history)
+		
+	def back(self):
+		self.navigator.go_to_last()
+	
+	def get_menu_items(self):
+		items = [
+			(u"Back", self.back),
+			(u"Now playing", self.navigator.go_to_now_playing)]
+		items.extend(self.basic_last_menu_items())
+
+		return items
+
+	def go_to(self):
+		pass
+
+	def show(self):
+		self.body.set_list(self.get_list_items())
+		appuifw.app.exit_key_handler = self.back
+
 
 class SettingsWindow(Window):
 	pass
@@ -1589,7 +1657,7 @@ class AudioScrobblerPresenter(object):
 		self.__ap_services = AccessPointServices(self.view)
 
 	def clear_as_db(self):
-		if self.view.ask("Are you sure you want to clear your history?"):
+		if self.view.confirm("Are you sure you want to clear your history?"):
 			self.__music_history.clear()
 	
 	def disconnect(self):
@@ -1598,7 +1666,9 @@ class AudioScrobblerPresenter(object):
 	
 	def connect(self):
 		if not self.is_online():
-			self.__ap_services.set_accesspoint()
+			if not self.__ap_services.set_accesspoint():
+				return False
+			
 			try:
 				return self.try_login()
 			except NoAudioScrobblerUserError:
@@ -1613,7 +1683,10 @@ class AudioScrobblerPresenter(object):
 	def try_login(self):
 		try:
 			self.__audio_scrobbler_service.login()
+			self.view.show_message("Connected")
 			return True
+		except AudioScrobblerWaitError, msg:
+			self.view.show_error_message(msg)
 		except AudioScrobblerCredentialsError:
 			self.view.show_error_message("Bad Username/Password. Change your credentials")
 		except NoAudioScrobblerUserError: raise
@@ -1629,6 +1702,12 @@ class AudioScrobblerPresenter(object):
 		password = self.view.ask_password("Inform your password")
 		if not password: return
 		
+		if self.__audio_scrobbler_service.user_changed(user_name):
+			if self.view.confirm("The username changed. The previous user music history will be removed. Proceed?"):
+				self.__music_history.clear()
+			else:
+				return
+			
 		self.__audio_scrobbler_service.set_credentials(AudioScrobblerUser(user_name, password))
 		self.view.show_message("Credentials saved")
 		
@@ -1638,6 +1717,7 @@ class AudioScrobblerPresenter(object):
 				self.show_cannot_connect()
 
 		self.__music_history.send_to_audioscrobbler()
+		self.view.show_message("History sent")
 	
 	def show_cannot_connect(self):
 		self.view.show_error_message("It was not possible to connect!")
@@ -1703,18 +1783,19 @@ class AccessPointServices(object):
 		self.__view.show_message("Default access point is unset ")
 
 	def select_accesspoint(self):
-		apid = socket.select_access_point()
-		if self.__view.ask("Set as default?") == True:
-			f = open(self.__ap_file_path, "w")
-			f.write(repr(apid))
-			f.close()
-			self.__view.show_message("Saved default access point")
-		
 		try:
+			apid = socket.select_access_point()
 			apo = socket.access_point(apid)
 			socket.set_default_access_point(apo)
+			if self.__view.confirm("Set as default?"):
+				f = open(self.__ap_file_path, "w")
+				f.write(repr(apid))
+				f.close()
+				self.__view.show_message("Saved default access point")
+			return True
 		except:
 			self.__view.show_error_message("It was not possible to set a connection")
+			return False
 
 	def disconnect(self):
 		socket.socket.close()
@@ -1728,10 +1809,11 @@ class AccessPointServices(object):
 			if apid:
 				apo = socket.access_point(apid)
 				socket.set_default_access_point(apo)
+				return True
 			else:
-				self.select_accesspoint()
+				return self.select_accesspoint()
 		except:
-			self.select_accesspoint()
+			return self.select_accesspoint()
 
 
 class AspyPlayerApplication(object):
