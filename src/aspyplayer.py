@@ -29,6 +29,7 @@ import urllib
 import socket
 import sys
 import graphics
+import traceback
 
 ##########################################################
 ######################### MODELS 
@@ -156,6 +157,10 @@ class Music(object):
 
 	def artist_played_at_formatted(self):
 		return u"%s - %s" % (self.played_at_formatted(), self.artist)
+
+	def can_send_now_playing(self):
+		return not self.now_playing_sent and self.position > 5
+
 
 class MusicPlayer(object):
 	current_volume = -1
@@ -617,7 +622,7 @@ class HardErrorController(object):
 	def check_waiting(self):
 		have_to_wait = self.how_long_to_wait()
 		if have_to_wait > 0:
-			raise AudioScrobblerWaitError("You have to wait %i seconds to try again!")
+			raise AudioScrobblerWaitError("You have to wait %i seconds to try again!" % have_to_wait)
  
 	def handle_hard_error(self, during_handshake=False):
 		if during_handshake:
@@ -655,10 +660,15 @@ class AudioScrobblerService(object):
 		self.__now_url = None
 		self.__post_url = None
 		self.__hard_error_controller = HardErrorController(self.force_disconnect)
-		self.logged = False
-	
+		self.__force_new_login = False
+
 	def force_disconnect(self):
-		self.logged = False
+		self.__force_new_login = True
+	
+	def check_connection(self):
+		if self.__force_new_login:
+			self.login()
+			self.__force_new_login()
 	
 	def set_credentials(self, user):
 		self.__user_repository.save(user)
@@ -693,8 +703,6 @@ class AudioScrobblerService(object):
    		return urllib.urlencode(values)
 
 	def login(self):
-		if self.logged: return True
-		
 		self.__hard_error_controller.check_waiting()
 		
 		try:
@@ -702,7 +710,6 @@ class AudioScrobblerService(object):
 			response = urllib.urlopen("%s?%s" % (self.__handshake_url, hand_shake_data))
 			as_response_data = self.handle_handshake_response(response)
 			self.__session_id, self.__now_url, self.__post_url = as_response_data
-			self.logged = True
 			self.__hard_error_controller.logging_sucessful()
 			self.__logger.debug("Login was OK: ID %s, NowUrl %s, PostUrl %s" % (
 																as_response_data))
@@ -736,14 +743,9 @@ class AudioScrobblerService(object):
 		else:
 			raise Exception("Authentication with AS failed.")
 	
-	def check_login(self):
-		if not self.logged:
-			raise AudioScrobblerError("You must be logged to execute this operation")
-		
 	def now_playing(self, music):
-		if music.now_playing_sent: return True
-		
-		self.check_login()
+		if not music.can_send_now_playing(): return True
+		self.check_connection()
 		
 		values = {
 			"s": self.__session_id, 
@@ -774,8 +776,7 @@ class AudioScrobblerService(object):
 		return False
 	
 	def send(self, musics):
-		self.check_login()
-		
+		self.check_connection()
 		try:
 			data = self.create_send_music_data(musics)
 			response = urllib.urlopen(self.__post_url, data)
@@ -850,7 +851,8 @@ class UnicodeHelper(object):
 
 class LogFactory(object):
 	def create_for(name):
-		logger = Logger(str(name), "c:\\data\\aspyplayer\\log.txt") 
+		# TODO: FileRotating
+		logger = Logger(str(name), "c:\\data\\aspyplayer\\log.txt")
 		return logger
 	
 	create_for = staticmethod(create_for)
@@ -864,15 +866,19 @@ class Logger(object):
 		
 	def debug(self, msg):
 		if self.level == 0:
-			f = open(self.path, "a")
-			f.write("DEBUG - %s" % msg)
-			f.close()
+			try:
+				f = open(self.path, "a")
+				f.write("DEBUG - %s\n" % msg)
+				f.close()
+			except: pass
 	
 	def info(self, msg):
 		if self.level > 0:
-			f = open(self.path, "a")
-			f.write("DEBUG - %s" % msg)
-			f.close()
+			try:
+				f = open(self.path, "a")
+				f.write("INFO - %s\n" % msg)
+				f.close()
+			except: pass
 			
 
 class ServiceLocator(object):
@@ -1109,7 +1115,8 @@ class ScreenNavigator(object):
 	def close(self):
 		if self.__now_playing_window:
 			self.__now_playing_window.close()
-
+		
+		self.__as_presenter.close()
 
 class Window(object):
 	def __init__(self, player_ui, navigator, title="ASPY Player"):
@@ -1154,7 +1161,8 @@ class Window(object):
 	def basic_lastfm_menu_items(self):
 			return [
 			(u"Last.fm", (
-				(u"Connect", self.as_presenter.connect), 
+				(u"Connect", self.as_presenter.connect),
+				(u"Disconnect", self.as_presenter.disconnect), 
 				(u"Clear History", self.as_presenter.clear_as_db), 
 				(u"Submit History", self.as_presenter.send_history),
 				(u"Show History", self.navigator.go_to_current_history),
@@ -1162,7 +1170,7 @@ class Window(object):
 
 	def basic_last_menu_items(self):
 		return [
-			(u"Admin", (
+			(u"Misc", (
 				(u"Settings", lambda: None), 
 				(u"Testing", self.tests))),
 			(u"About", self.about), 
@@ -1646,55 +1654,69 @@ class NowPlayingPresenter(object):
 class AudioScrobblerPresenter(object):
 	def __init__(self, service_locator):
 		self.view = None
-		self.__ap_services = None
+		self.__ap_services = AccessPointServices()
 		self.__music_history = service_locator.music_history
 		self.__audio_scrobbler_service = service_locator.as_service
 		self.__now_playing_error_counter = 0
+		self.__wanna_connect = False
+
+	def close(self):
+		self.__ap_services.close()
+
+	def online_operation(self, operation):
+		result = False
+		try:
+			operation()
+			result = True
+		except IOError:
+			while self.view.confirm("Connection failed. Wanna try again?"):
+				try:
+					operation()
+					result = True
+				except: pass # TODO Logging here
+			if not result:
+				self.__wanna_connect = False
+		
+		return result 
 
 	def set_view(self, view):
 		self.view = view
 		view.as_presenter = self
-		self.__ap_services = AccessPointServices(self.view)
 
 	def clear_as_db(self):
 		if self.view.confirm("Are you sure you want to clear your history?"):
 			self.__music_history.clear()
 	
 	def disconnect(self):
-		if self.is_online():
-			self.__ap_services.disconnect()
+		self.__wanna_connect = False
+		self.__ap_services.close()
 	
 	def connect(self):
-		if not self.is_online():
-			if not self.__ap_services.set_accesspoint():
-				return False
-			
-			try:
-				return self.try_login()
-			except NoAudioScrobblerUserError:
-				self.create_as_credentials()
-				return self.try_login()
-			
+		if not self.__ap_services.set_accesspoint():
+			self.show_cannot_connect()
 			return False
-		else:
-			self.view.show_message("Already connected!")
-			return False
+			
+		try:
+			self.__wanna_connect = True
+			return self.online_operation(self.try_login)
+		except NoAudioScrobblerUserError:
+			self.create_as_credentials()
+			return self.online_operation(self.try_login)
+		except:
+			self.view.show_error_message("It was not possible to login!")
+		
+		return False
 	
 	def try_login(self):
 		try:
 			self.__audio_scrobbler_service.login()
 			self.view.show_message("Connected")
-			return True
 		except AudioScrobblerWaitError, msg:
 			self.view.show_error_message(msg)
 		except AudioScrobblerCredentialsError:
 			self.view.show_error_message("Bad Username/Password. Change your credentials")
 		except NoAudioScrobblerUserError: raise
-		except:
-			self.view.show_error_message("It was not possible to log in.")
 
-		return False
-	
 	def create_as_credentials(self):
 		user_name = self.view.ask_text("Inform your username")
 		if not user_name: return
@@ -1712,12 +1734,9 @@ class AudioScrobblerPresenter(object):
 		self.view.show_message("Credentials saved")
 		
 	def send_history(self):
-		if not self.is_online():
-			if not self.connect():
-				self.show_cannot_connect()
-
-		self.__music_history.send_to_audioscrobbler()
-		self.view.show_message("History sent")
+		if self.__wanna_connect:
+			if self.online_operation(self.__music_history.send_to_audioscrobbler):
+				self.view.show_message("History sent")
 	
 	def show_cannot_connect(self):
 		self.view.show_error_message("It was not possible to connect!")
@@ -1727,23 +1746,45 @@ class AudioScrobblerPresenter(object):
 			self.music_list.play()
 
 	def finished_music(self, music):
-		if self.is_online():
-			self.__music_history.send_to_audioscrobbler()
+		if self.__wanna_connect:
+			self.online_operation(self.__music_history.send_to_audioscrobbler)
 	
 	def add_to_history(self, music):
 		self.__music_history.add_music(music)
 	
-	def is_online(self):
-		return self.__audio_scrobbler_service.logged
-	
 	def audio_scrobbler_now_playing(self, music):
-		if self.is_online():
-			if not self.__audio_scrobbler_service.now_playing(music):
+		if self.__wanna_connect:
+			if not self.online_operation(lambda: self.__audio_scrobbler_service.now_playing(music)):
 				self.__now_playing_error_counter += 1
-				if self.__now_playing_error_counter % 60 == 0:
+				if self.__now_playing_error_counter % 30 == 0:
 					self.view.show_message("It was not possible to send now playing to Last.fm")
 			else:
 				self.__now_playing_error_counter = 0
+
+class AccessPointServices(object):
+	def __init__(self, default_ap=None):
+		self.__default_ap = default_ap
+		self.__ap = None
+	
+	def set_accesspoint(self):
+		apid = self.__default_ap
+		if not apid:
+			apid = socket.select_access_point()
+		if apid:
+			try:
+				apo = socket.access_point(apid)
+				socket.set_default_access_point(apo)
+				self.__ap = apo
+				return True
+			except:
+				pass
+			
+		return False
+
+	def close(self):
+		if self.__ap:
+			self.__ap.stop()
+			socket.set_default_access_point(None)
 
 class TextRenderer:
 	def __init__(self, canvas):
@@ -1769,51 +1810,6 @@ class TextRenderer:
 
 		self.coords = [self.coords[0],
 					self.coords[1] - bounding[1] + bounding[3] + self.spacing]
-
-
-class AccessPointServices(object):
-	def __init__(self, view, access_point_file_path="e:\\apid.txt"):
-		self.__view = view
-		self.__ap_file_path = access_point_file_path
-	
-	def unset_accesspoint(self):
-		f = open(self.__ap_file_path, "w")
-		f.write(repr(None))
-		f.close()
-		self.__view.show_message("Default access point is unset ")
-
-	def select_accesspoint(self):
-		try:
-			apid = socket.select_access_point()
-			apo = socket.access_point(apid)
-			socket.set_default_access_point(apo)
-			if self.__view.confirm("Set as default?"):
-				f = open(self.__ap_file_path, "w")
-				f.write(repr(apid))
-				f.close()
-				self.__view.show_message("Saved default access point")
-			return True
-		except:
-			self.__view.show_error_message("It was not possible to set a connection")
-			return False
-
-	def disconnect(self):
-		socket.socket.close()
-
-	def set_accesspoint(self):
-		try:
-			f = open(self.__ap_file_path, "rb")
-			setting = f.read()
-			apid = eval(setting)
-			f.close()
-			if apid:
-				apo = socket.access_point(apid)
-				socket.set_default_access_point(apo)
-				return True
-			else:
-				return self.select_accesspoint()
-		except:
-			return self.select_accesspoint()
 
 
 class AspyPlayerApplication(object):
@@ -1851,6 +1847,15 @@ class Fixture(object):
 		music.played_at = int(time.time()) - 40
 		return music
 	
+class InternetConnectionFixture(Fixture):
+	def __init__(self):
+		Fixture.__init__(self)
+	
+	def run(self):
+		urllib.urlopen("http://www.uol.com.br")
+		
+		
+	
 class AudioScrobblerServiceFixture(Fixture):
 	def __init__(self):
 		Fixture.__init__(self)
@@ -1865,8 +1870,6 @@ class AudioScrobblerServiceFixture(Fixture):
 			as_service.set_credentials(AudioScrobblerUser("doug_fernando", self.pwd))
 			as_service.login()
 		
-			self.assertTrue(as_service.logged, "Logging")
-			
 			music = self.load_music()
 			result = as_service.now_playing(music)
 			self.assertTrue(result, "Sent now playing to AS")
@@ -2160,6 +2163,7 @@ class UnicodeHelperFixture(Fixture):
 class Fixtures(object):
 	def __init__(self):
 		self.tests = [
+			InternetConnectionFixture(),
 			MusicFixture(),
 			MusicPlayerFixture(),
 			MusicListFixture(),
