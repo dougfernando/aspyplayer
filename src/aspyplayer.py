@@ -45,6 +45,7 @@ class Music(object):
 		self.played_at = 0
 		self.position = 0
 		self.now_playing_sent = False
+		self.__logger = LogFactory.create_for(self.__class__.__name__)
 	
 	def init_music(self):
 		if self.file_path:
@@ -80,6 +81,8 @@ class Music(object):
 			self.comment = None
 	
 	def remove_X00(self, value):
+		if value.startswith("UUU"):
+			print value
 		return value.replace("\x00", "")
 	
 	def __str__(self):
@@ -88,6 +91,8 @@ class Music(object):
 
 	def play(self, callback):
 		self.player.play(callback)
+		if self.__logger.debug:
+			self.__logger.debug("Playing: %s" % self.title)
 	
 	def stop(self):
 		self.player.stop()
@@ -248,22 +253,39 @@ class MusicList(object):
 		self.__listener = listener
 		self.__should_stop = False
 		self.__current_index = 0
-		self.__musics = musics
+		self.__random = random
+		self.__update_play_mode = False
 		self.is_playing = False
 		self.is_new = True
+		self.__logger = LogFactory.create_for(self.__class__.__name__)
+		if musics:
+			self.__linear_musics = musics
+			self.__random_musics = musics[:]
+			shuffle(self.__random_musics)
 		
-		if self.__musics:
 			if random: 
-				shuffle(self.__musics)
+				self.__musics = self.__random_musics
+			else:
+				self.__musics = self.__linear_musics
 			
 			self.current_music = self.__musics[0]
+			
+			self.log_music_list()
 		else:
 			self.current_music = None
+	
+	def log_music_list(self):
+		if self.__logger.debug:
+			self.__logger.debug("Music list:")
+			for music in self.__musics:
+				self.__logger.debug("\t%s-%s" % (music.number, music.title))
+			self.__logger.debug("----")
 	
 	def is_empty(self):
 		return len(self.__musics) < 1
 
 	def __len__(self):
+		if not self.__musics: return 0
 		return len(self.__musics)
 	
 	def play(self):
@@ -271,6 +293,7 @@ class MusicList(object):
 		self.is_new = False
 		
 		while self.current_music != None:
+			self.check_random()
 			self.current_music.play(self.play_callback)
 			self.is_playing = True
 			self.__listener.update_music(self.current_music)
@@ -309,14 +332,14 @@ class MusicList(object):
 	def stop(self):
 		self.__should_stop = True
 		if self.current_music: 
-			self.check_trying_to_pay()
+			self.check_trying_to_play()
 			was_playing = self.current_music.is_playing()
 			self.current_music.stop()
 			if was_playing:
 				self.__listener.finished_music(self.current_music)
 			self.is_playing = False
 			
-	def check_trying_to_pay(self):
+	def check_trying_to_play(self):
 		if self.current_music: 
 			i = 0
 			while self.current_music.is_loading():
@@ -325,14 +348,16 @@ class MusicList(object):
 					raise Exception("Could not load the music")
 			
 	def next(self):
-		self.check_trying_to_pay()
+		self.check_trying_to_play()
 		self.stop()
+		self.check_random()
 		self.move_next()
 		self.play()
 		
 	def previous(self):
-		self.check_trying_to_pay()
+		self.check_trying_to_play()
 		self.stop()
+		self.check_random()
 		self.move_previous()
 		self.play()
 
@@ -354,7 +379,20 @@ class MusicList(object):
 		return False
 
 	def current_position_formated(self):
-		return unicode("%i / %i" % (self.__current_index + 1, len(self.__musics)))
+		return unicode("%i / %i" % (self.__current_index + 1, len(self)))
+
+	def check_random(self):
+		if self.__update_play_mode:
+			if not self.__random:
+				self.__musics = self.__linear_musics
+			else:
+				self.__musics = self.__random_musics
+	
+			self.__update_play_mode = False
+
+	def random(self, random=True):
+		self.__random = random
+		self.__update_play_mode = True
 
 
 class MusicHistory(object):
@@ -492,9 +530,11 @@ class MusicRepository(object):
 		assert result > 0
 
 	def delete(self, music_path):
-		cmd = "DELETE FROM Music WHERE Path = '%s'" % music_path
+		cmd = "DELETE FROM Music WHERE Path = '%s'" % music_path.replace("'", "''")
+		
 		result = self.__db_helper.execute_nonquery(cmd)
 		assert result > 0
+			
 
 	def update_library(self, musics_path):
 		all_music_in_db = self.find_all_musics_path()
@@ -868,7 +908,7 @@ class Logger(object):
 		if self.level == 0:
 			try:
 				f = open(self.path, "a")
-				f.write("DEBUG - %s\n" % msg)
+				f.write("\nDEBUG - %s" % msg)
 				f.close()
 			except: pass
 	
@@ -876,7 +916,7 @@ class Logger(object):
 		if self.level > 0:
 			try:
 				f = open(self.path, "a")
-				f.write("INFO - %s\n" % msg)
+				f.write("\nINFO - %s" % msg)
 				f.close()
 			except: pass
 			
@@ -1283,12 +1323,16 @@ class MusicsWindow(Window):
 	def get_list_items(self):
 		list_items = []
 		
-		self.musics.sort(lambda m1, m2: cmp(m1.title.upper(), m2.title.upper()))
+		self.sort_musics()
 		i = 1
 		for music in self.musics:
 			list_items.append(u"%i-%s" % (i, music.title))
+			i += 1
 		
 		return list_items
+	
+	def sort_musics(self):
+		self.musics.sort(lambda m1, m2: cmp(m1.number.upper(), m2.number.upper()))
 	
 	def back(self):
 		self.navigator.go_to_select_window()
@@ -1453,6 +1497,7 @@ class NowPlayingWindow(Window):
 		self.bg_img = self.load_image()
 		self.body = appuifw.Canvas(self.render) # TODO: destruir quando nao estiver visivel
 		self.presenter = None
+		self.__random = False
 
 	def load_image(self):
 		possible_locations = ["E:\\python\\now_playing_bg.jpg", "C:\\python\\now_playing_bg.jpg"]
@@ -1484,6 +1529,9 @@ class NowPlayingWindow(Window):
 	def update_music_list(self, music_list):
 		self.stop()
 		self.music_list = music_list
+		if self.__random:
+			self.music_list.random()
+
 		self.presenter = NowPlayingPresenter(self, music_list)
 
 	def show_music_information(self, music):
@@ -1506,6 +1554,10 @@ class NowPlayingWindow(Window):
 		tr.render_line("     Status: %s       %s" % (music.get_status_formatted(), 
 					self.music_list.current_position_formated()), (u"normal", 13, graphics.FONT_BOLD))
 		tr.add_blank_line()
+		tr.add_blank_line()
+		tr.add_blank_line()
+		if self.__random:
+			tr.render_line("     Playing in random mode", (u"normal", 10, graphics.FONT_BOLD))
 		
 	def finished_music(self, music):
 		self.as_presenter.finished_music(music)
@@ -1521,6 +1573,9 @@ class NowPlayingWindow(Window):
 	def back(self):
 		self.navigator.go_to_select_window()
 
+	def random(self):
+		self.__random = self.presenter.random()
+
 	def get_menu_items(self):
 		items = [
 			(u"Back", self.back),
@@ -1528,7 +1583,8 @@ class NowPlayingWindow(Window):
 				(u"Play", self.presenter.play),
 				(u"Stop", self.presenter.stop), 
 				(u"Next", self.presenter.next),
-				(u"Previous", self.presenter.previous))), 
+				(u"Previous", self.presenter.previous),
+				(u"Random", self.random))), 
 			(u"Volume", (
 				(u"Up", self.presenter.volume_up), 
 				(u"Down", self.presenter.volume_down)))]
@@ -1608,6 +1664,14 @@ class NowPlayingPresenter(object):
 	def is_in_play_mode(self):
 		return self.music_list
 	
+	def random(self):
+		if self.view.confirm("Play in random mode?"):
+			self.music_list.random()
+			return True
+		else:
+			self.music_list.random(False)
+			return False
+
 	def play(self): 
 		if not self.music_list.is_empty():
 			self.music_list.play()
@@ -1650,7 +1714,7 @@ class NowPlayingPresenter(object):
 			self.music_list.current_music.volume_down()
 			self.show_current_volume()
 		
-
+		
 class AudioScrobblerPresenter(object):
 	def __init__(self, service_locator):
 		self.view = None
@@ -1847,15 +1911,7 @@ class Fixture(object):
 		music.played_at = int(time.time()) - 40
 		return music
 	
-class InternetConnectionFixture(Fixture):
-	def __init__(self):
-		Fixture.__init__(self)
-	
-	def run(self):
-		urllib.urlopen("http://www.uol.com.br")
-		
-		
-	
+
 class AudioScrobblerServiceFixture(Fixture):
 	def __init__(self):
 		Fixture.__init__(self)
@@ -1954,6 +2010,8 @@ class MusicFixture(Fixture):
 		music.is_playing = lambda: False
 		self.assertEquals("Stopped", music.get_status_formatted(), "stopped status formatted")
 
+#		music_test = Music("E:\\Music\\Kasabian - Empire\\03 - Last Trip (In Flight).mp3");
+#		self.assertEquals("Last Trip (In Flight)", music_test.title, "UUUU... teste")
 
 class UserFixture(Fixture):
 	def __init__(self):
@@ -2113,6 +2171,26 @@ class MusicListFixture(Fixture):
 		self.assertTrue(ml.move_previous(), "Can move back")
 		self.assertTrue(ml.move_previous() == False, "Cannot move back")
 		
+		# random
+		m1 = Music()
+		m1.number = "1"
+		m2 = Music()
+		m2.number = "2"
+		m3 = Music()
+		m3.number = "3"
+		m4 = Music()
+		m4.number = "4"
+
+		musics2 = [m1, m2, m3]
+
+		
+		ml2 = MusicList(musics2, None, None)
+		ml2.random()
+		ml2.check_random()
+		ml2.move_next()
+		
+		self.assertTrue(ml2.current_music.number != m2.number, "Next is not really the next now")
+		
 
 class HardErrorControllerFixture(Fixture):
 	def __init__(self):
@@ -2163,7 +2241,6 @@ class UnicodeHelperFixture(Fixture):
 class Fixtures(object):
 	def __init__(self):
 		self.tests = [
-			InternetConnectionFixture(),
 			MusicFixture(),
 			MusicPlayerFixture(),
 			MusicListFixture(),
