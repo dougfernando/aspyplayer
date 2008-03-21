@@ -81,8 +81,6 @@ class Music(object):
 			self.comment = None
 	
 	def remove_X00(self, value):
-		if value.startswith("UUU"):
-			print value
 		return value.replace("\x00", "")
 	
 	def __str__(self):
@@ -1051,6 +1049,9 @@ class PlayerUI(object):
 			self.navigator.close()
 		finally:
 			self.__applock.signal()
+			appname = appuifw.app.full_name().lower()
+			if appname.find("ython") == -1:
+				appuifw.app.set_exit()
 	
 	def close(self):
 		appuifw.app.menu = []
