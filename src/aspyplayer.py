@@ -32,7 +32,43 @@ import graphics
 import traceback
 
 ##########################################################
-######################### MODELS 
+######################### DOMAIN MODEL 
+
+class Id3InfoReader(object):
+	def __init__(self, file_path):
+		self.file_path = file_path
+		self.read_v1()
+		
+	def read_v1(self):
+		path = self.file_path.encode("utf8")
+		fp = open(path, "r")
+		fp.seek(-128, 2)
+		fp.read(3)
+
+		self.title = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
+		if not self.title: 
+			if len(self.file_path) > 18:
+				self.title = UnicodeHelper.safe_unicode("..." + self.file_path[-18:])
+			else:
+				self.title = UnicodeHelper.safe_unicode(self.file_path)
+		
+		self.artist = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
+		if not self.artist: 
+			self.artist = u"Unknow"
+		
+		self.album = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
+		if not self.album: 
+			self.album = u"Unknow"
+		
+		self.year = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(4)))
+		self.comment = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(28)))
+		self.number = u""
+
+		fp.close()
+	
+	def remove_X00(self, value):
+		return value.replace("\x00", "")
+
 
 class Music(object):
 	def __init__(self, file_path=""):
@@ -40,7 +76,6 @@ class Music(object):
 		self.init_music()
 		self.player = MusicPlayer(self)
 		self.length = 0
-		self.number = ""
 		self.music_brainz_ID = ""
 		self.played_at = 0
 		self.position = 0
@@ -49,43 +84,23 @@ class Music(object):
 	
 	def init_music(self):
 		if self.file_path:
-			path = self.file_path.encode("utf8")
-			fp = open(path, "r")
-			fp.seek(-128, 2)
-			fp.read(3)
-	
-			self.title = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
-			if not self.title: 
-				if len(self.file_path) > 18:
-					self.title = UnicodeHelper.safe_unicode("..." + self.file_path[-18:])
-				else:
-					self.title = UnicodeHelper.safe_unicode(self.file_path)
-			
-			self.artist = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
-			if not self.artist: 
-				self.artist = u"Unknow"
-			
-			self.album = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
-			if not self.album: 
-				self.album = u"Unknow"
-			
-			self.year = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(4)))
-			self.comment = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(28)))
-	
-			fp.close()
+			id3_reader = Id3InfoReader(self.file_path)
+			self.title = id3_reader.title
+			self.artist = id3_reader.artist
+			self.album = id3_reader.album
+			self.year = id3_reader.year
+			self.comment = id3_reader.comment
+			self.number = id3_reader.number
 		else:
 			self.title = None
 			self.artist = None
 			self.album = None
 			self.year = None
 			self.comment = None
-	
-	def remove_X00(self, value):
-		return value.replace("\x00", "")
-	
+			self.number = ""
+
 	def __str__(self):
-		return u"  Artist: %s\n  Title: %s\n  Album: %s\n  Path: %s" % (
-						self.artist, self.title, self.album, self.file_path)
+		return u"  Artist: %s\n  Title: %s\n" % (self.artist, self.title)
 
 	def play(self, callback):
 		self.player.play(callback)
@@ -180,7 +195,7 @@ class MusicPlayer(object):
 	def play(self, callback=None):
 		if not self.__paused:
 			self.__loading = True
-			self.__player = audio.Sound.open(self.__music.file_path)
+			self.__player = self.create_player_for(self.__music.file_path)
 			self.__loading = False
 			self.configure_volume()
 			self.__music.length = int(self.__player.duration() / 1e6)
@@ -191,8 +206,10 @@ class MusicPlayer(object):
 		
 		self.__player.play(times=1, interval=0, callback=callback)
 
+	def create_player_for(self, path):
+		return audio.Sound.open(path)
+
 	def configure_volume(self):
-		# HACK: I don't know why, but using directly the class attribute does not work
 		volume = self.__class__.current_volume 
 		if volume < 0: # default value = -1
 			default_volume = self.__player.max_volume() / 4
@@ -236,7 +253,10 @@ class MusicPlayer(object):
 		if not self.__player: 
 			return False
 		
-		return self.__player.state() == audio.EPlaying
+		return self.__player.state() == self.get_is_playing_state()
+
+	def get_is_playing_state(self):
+		return audio.EPlaying
 
 	def current_volume_percentage(self):
 		return int((float(self.__class__.current_volume) / self.__player.max_volume()) * 100)
@@ -253,9 +273,10 @@ class MusicList(object):
 		self.__current_index = 0
 		self.__random = random
 		self.__update_play_mode = False
+		self.__logger = LogFactory.create_for(self.__class__.__name__)
 		self.is_playing = False
 		self.is_new = True
-		self.__logger = LogFactory.create_for(self.__class__.__name__)
+
 		if musics:
 			self.__linear_musics = musics
 			self.__random_musics = musics[:]
@@ -291,7 +312,7 @@ class MusicList(object):
 		self.is_new = False
 		
 		while self.current_music != None:
-			self.check_random()
+			self.update_playing_mode_if_necessary()
 			self.current_music.play(self.play_callback)
 			self.is_playing = True
 			self.__listener.update_music(self.current_music)
@@ -330,14 +351,15 @@ class MusicList(object):
 	def stop(self):
 		self.__should_stop = True
 		if self.current_music: 
-			self.check_trying_to_play()
+			self.wait_if_trying_to_play()
 			was_playing = self.current_music.is_playing()
 			self.current_music.stop()
 			if was_playing:
 				self.__listener.finished_music(self.current_music)
+
 			self.is_playing = False
 			
-	def check_trying_to_play(self):
+	def wait_if_trying_to_play(self):
 		if self.current_music: 
 			i = 0
 			while self.current_music.is_loading():
@@ -346,16 +368,16 @@ class MusicList(object):
 					raise Exception("Could not load the music")
 			
 	def next(self):
-		self.check_trying_to_play()
+		self.wait_if_trying_to_play()
 		self.stop()
-		self.check_random()
+		self.update_playing_mode_if_necessary()
 		self.move_next()
 		self.play()
 		
 	def previous(self):
-		self.check_trying_to_play()
+		self.wait_if_trying_to_play()
 		self.stop()
-		self.check_random()
+		self.update_playing_mode_if_necessary()
 		self.move_previous()
 		self.play()
 
@@ -379,7 +401,7 @@ class MusicList(object):
 	def current_position_formated(self):
 		return unicode("%i / %i" % (self.__current_index + 1, len(self)))
 
-	def check_random(self):
+	def update_playing_mode_if_necessary(self):
 		if self.__update_play_mode:
 			if not self.__random:
 				self.__musics = self.__linear_musics
@@ -435,9 +457,9 @@ class MusicHistory(object):
 
 
 class AudioScrobblerUser(object):
-	def __init__(self, username, password, hashed=False):
+	def __init__(self, username, password, password_hashed=False):
 		self.username = username
-		if not hashed:
+		if not password_hashed:
 			self.password = md5.md5(password).hexdigest()
 		else:
 			self.password = password
@@ -448,6 +470,7 @@ class AudioScrobblerUser(object):
 class MusicRepository(object):
 	def __init__(self, db_helper):
 		self.__db_helper = db_helper
+		self.__logger = LogFactory.create_for(self.__class__.__name__)
 
 	def exists(self, path):
 		return os.path.exists(path.encode("utf8"))
@@ -532,11 +555,9 @@ class MusicRepository(object):
 		
 		result = self.__db_helper.execute_nonquery(cmd)
 		assert result > 0
-			
 
 	def update_library(self, musics_path):
-		all_music_in_db = self.find_all_musics_path()
-		all_music_in_db_path = [music_file_path for music_file_path in all_music_in_db]
+		all_music_in_db_path = self.find_all_musics_path()
 		
 		to_be_added = [x for x in musics_path if x not in all_music_in_db_path]
 		to_be_deleted = [x for x in all_music_in_db_path if x not in musics_path]
@@ -547,8 +568,9 @@ class MusicRepository(object):
 				music = Music(file)
 				new_musics.append(music)
 			except:
-				pass
-			
+				self.__logger.debug("Addind file to library error: '%s'" % \
+					''.join(traceback.format_exception(*sys.exc_info())))
+
 		for music in new_musics:
 			self.save(music) 
 	
@@ -620,7 +642,6 @@ class MusicHistoryRepository(object):
 ##########################################################
 ######################### SERVICES 
 
-# TODO: Test this exception handling
 class AudioScrobblerWaitError(Exception):
 	pass
 
@@ -676,7 +697,6 @@ class HardErrorController(object):
 			if self.__hard_error_counter == 3:
 				self.force_new_handshake()
 
-	
 	def now(self):
 		return time.time()
 			
@@ -888,9 +908,8 @@ class UnicodeHelper(object):
 
 
 class LogFactory(object):
-	def create_for(name):
-		# TODO: FileRotating
-		logger = Logger(str(name), "c:\\data\\aspyplayer\\log.txt")
+	def create_for(name, file_path="c:\\data\\aspyplayer\\log.txt"):
+		logger = Logger(str(name), file_path)
 		return logger
 	
 	create_for = staticmethod(create_for)
@@ -938,6 +957,7 @@ class ServiceLocator(object):
 		self.as_service = None	
 		self.music_history = None
 		self.music_factory = None
+
 
 class FileSystemServices:
 	def find_all_files(self, root_dir, file_extension):
@@ -1025,7 +1045,6 @@ class DbHelper(object):
 	def create_music_table(self):
 		cmd = "CREATE TABLE Music (Path varchar(200), Artist varchar(200), Album varchar(200))"
 		self.execute_nonquery(cmd)
-		# TODO: add index
 	
 	def create_music_history_table(self):
 		cmd = "CREATE TABLE Music_History (Artist varchar(200), Track varchar(200), PlayedAt integer, Album varchar(200), TrackLength integer)"
@@ -1041,7 +1060,7 @@ class DbHelper(object):
 
 class PlayerUI(object):
 	def __init__(self, service_locator):
-		self.navigator = ScreenNavigator(self, service_locator)
+		self.navigator = ScreenNavigator(self.quit, service_locator)
 		self.__applock = e32.Ao_lock()
 		
 	def quit(self):
@@ -1064,22 +1083,22 @@ class PlayerUI(object):
 
 
 class ScreenNavigator(object):
-	def __init__(self, player_ui, service_locator):
-		self.__player_ui = player_ui
+	def __init__(self, quit_handler, service_locator):
+		self.__quit_handler = quit_handler
 		self.__service_locator = service_locator
 		self.__as_presenter = AudioScrobblerPresenter(self.__service_locator)
 		self.__last_window = None
 		self.__current_window = None
 		
 		# Application screens
-		self.__main_window = MainWindow(self.__player_ui, self, self.__service_locator)
-		self.__select_window = SelectWindow(self.__player_ui, self, self.__service_locator)
-		self.__all_musics_window = AllMusicsWindow(self.__player_ui, self, self.__service_locator)
-		self.__artists_window = ArtistsWindow(self.__player_ui, self, self.__service_locator)
-		self.__albums_window = AlbumsWindow(self.__player_ui, self, self.__service_locator)
-		self.__musics_window = MusicsWindow(self.__player_ui, self)
-		self.__artist_musics_window = ArtistMusicsWindow(self.__player_ui, self, self.__service_locator)
-		self.__current_history_window = CurrentHistoryWindow(self.__player_ui, self, self.__service_locator)
+		self.__main_window = None
+		self.__select_window = None
+		self.__all_musics_window = None
+		self.__artists_window = None
+		self.__albums_window = None
+		self.__musics_window = None
+		self.__artist_musics_window = None
+		self.__current_history_window = None
 		self.__now_playing_window = None
 
 	def go_to_last(self):
@@ -1089,9 +1108,15 @@ class ScreenNavigator(object):
 			self.go_to(self.__last_window)
 	
 	def go_to_current_history(self):
+		if not self.__current_history_window:
+			self.__current_history_window = CurrentHistoryWindow(self.__quit_handler, self, self.__service_locator)
+					
 		self.go_to(self.__current_history_window)
 	
 	def go_to_artist_musics(self, artist=None):
+		if not self.__artist_musics_window:
+			self.__artist_musics_window = ArtistMusicsWindow(self.__quit_handler, self, self.__service_locator)
+		
 		if not artist:
 			assert self.__artist_musics_window.artist
 		else:
@@ -1100,21 +1125,39 @@ class ScreenNavigator(object):
 		self.go_to(self.__artist_musics_window)
 	
 	def go_to_main_window(self):
+		if not self.__main_window:
+			self.__main_window = MainWindow(self.__quit_handler, self, self.__service_locator)
+		
 		self.go_to(self.__main_window)
 
 	def go_to_select_window(self):
+		if not self.__select_window:
+			self.__select_window = SelectWindow(self.__quit_handler, self, self.__service_locator)
+		
 		self.go_to(self.__select_window)
 
 	def go_to_all_musics_window(self):
+		if not self.__all_musics_window:
+			self.__all_musics_window = AllMusicsWindow(self.__quit_handler, self, self.__service_locator)
+		
 		self.go_to(self.__all_musics_window)
 
 	def go_to_artists_window(self):
+		if not self.__artists_window:
+			self.__artists_window = ArtistsWindow(self.__quit_handler, self, self.__service_locator)
+		
 		self.go_to(self.__artists_window)
 
 	def go_to_albums_window(self):
+		if not self.__albums_window:
+			self.__albums_window = AlbumsWindow(self.__quit_handler, self, self.__service_locator)
+		
 		self.go_to(self.__albums_window)
 
 	def go_to_musics(self, musics=None):
+		if not self.__musics_window:
+			self.__musics_window = MusicsWindow(self.__quit_handler, self)
+		
 		if musics:
 			self.__musics_window.musics = musics
 		else:
@@ -1128,7 +1171,7 @@ class ScreenNavigator(object):
 			return
 		
 		if not self.__now_playing_window:
-			self.__now_playing_window = NowPlayingWindow(self.__player_ui, self)
+			self.__now_playing_window = NowPlayingWindow(self.__quit_handler, self)
 
 		if musics:
 			music_list = MusicList(musics, self.__now_playing_window)
@@ -1159,9 +1202,10 @@ class ScreenNavigator(object):
 		
 		self.__as_presenter.close()
 
+
 class Window(object):
-	def __init__(self, player_ui, navigator, title="ASPY Player"):
-		self.player_ui = player_ui
+	def __init__(self, quit_handler, navigator, title="ASPY Player"):
+		self.quit_handler = quit_handler
 		self.navigator = navigator
 		self.title = unicode(title)
 		self.body = None
@@ -1193,11 +1237,14 @@ class Window(object):
 		return appuifw.query(unicode(question), "query")
 
 	def show(self):
-		appuifw.app.exit_key_handler = self.player_ui.quit
+		appuifw.app.exit_key_handler = self.quit_handler()
+
+	def set_right_key_handler(self, handler):
+		appuifw.app.exit_key_handler = handler
 
 	def tests(self):
 		if self.confirm("For development purposes only. It may crash the application. Continue?"):
-			Fixtures().run()
+			AspyFixtures().run()
 
 	def basic_lastfm_menu_items(self):
 			return [
@@ -1226,15 +1273,20 @@ class Window(object):
 
 	def quit(self):
 		if self.confirm("Are you sure you want to exit the application?"):
-			self.player_ui.quit()
+			self.quit_handler()
 
+	def create_listbox(self, items, handler):
+		return appuifw.Listbox(items, handler)
+	
+	def create_canvas(self, redraw_handler):
+		return appuifw.Canvas(redraw_handler)
 	
 class MainWindow(Window):
-	def __init__(self, player_ui, navigator, service_locator):
-		Window.__init__(self, player_ui, navigator)
+	def __init__(self, quit_handler, navigator, service_locator):
+		Window.__init__(self, quit_handler, navigator)
 		self.__fs_services = service_locator.file_system_services
 		self.__music_repository = service_locator.music_repository
-		self.body = appuifw.Listbox(self.get_list_items(), self.go_to)
+		self.body = self.create_listbox(self.get_list_items(), self.go_to)
 	
 	def go_to(self):
 		index = self.body.current()
@@ -1269,14 +1321,14 @@ class MainWindow(Window):
 	
 	def show(self):
 		self.update_menu(self.get_menu_items())
-		appuifw.app.exit_key_handler = self.quit
+		self.set_right_key_handler(self.quit)
 
 
 class SelectWindow(Window):
-	def __init__(self, player_ui, navigator, service_locator):
-		Window.__init__(self, player_ui, navigator)
+	def __init__(self, quit_handler, navigator, service_locator):
+		Window.__init__(self, quit_handler, navigator)
 		self.__music_repository = service_locator.music_repository
-		self.body = appuifw.Listbox([(u"empty", u"empty")], self.go_to)
+		self.body = self.create_listbox([(u"empty", u"empty")], self.go_to)
 		self.menu = self.get_menu_items()
 
 	def get_list_items(self):
@@ -1307,17 +1359,17 @@ class SelectWindow(Window):
 
 	def show(self):
 		self.body.set_list(self.get_list_items())
-		appuifw.app.exit_key_handler = self.back
+		self.set_right_key_handler(self.back)
 
 
 class MusicsWindow(Window):
-	def __init__(self, player_ui, navigator, title=""):
+	def __init__(self, quit_handler, navigator, title=""):
 		if title: 
-			Window.__init__(self, player_ui, navigator, title)
+			Window.__init__(self, quit_handler, navigator, title)
 		else:
-			Window.__init__(self, player_ui, navigator)
+			Window.__init__(self, quit_handler, navigator)
 		
-		self.body = appuifw.Listbox([u"empty"], self.go_to)
+		self.body = self.create_listbox([u"empty"], self.go_to)
 		self.menu = self.get_menu_items()
 		self.musics = []
 
@@ -1352,12 +1404,12 @@ class MusicsWindow(Window):
 
 	def show(self):
 		self.body.set_list(self.get_list_items())
-		appuifw.app.exit_key_handler = self.back
+		self.set_right_key_handler(self.back)
 
 
 class AllMusicsWindow(MusicsWindow):
-	def __init__(self, player_ui, navigator, service_locator):
-		MusicsWindow.__init__(self, player_ui, navigator)
+	def __init__(self, quit_handler, navigator, service_locator):
+		MusicsWindow.__init__(self, quit_handler, navigator)
 		self.__music_repository = service_locator.music_repository
 	
 	def show(self):
@@ -1366,11 +1418,11 @@ class AllMusicsWindow(MusicsWindow):
 
 
 class ArtistsWindow(Window):
-	def __init__(self, player_ui, navigator, service_locator):
-		Window.__init__(self, player_ui, navigator)
+	def __init__(self, quit_handler, navigator, service_locator):
+		Window.__init__(self, quit_handler, navigator)
 		self.__music_repository = service_locator.music_repository
 			
-		self.body = appuifw.Listbox([u"empty"], self.go_to)
+		self.body = self.create_listbox([u"empty"], self.go_to)
 		self.menu = self.get_menu_items()
 
 	def get_list_items(self):
@@ -1400,13 +1452,14 @@ class ArtistsWindow(Window):
 
 	def show(self):
 		self.body.set_list(self.get_list_items())
-		appuifw.app.exit_key_handler = self.back
+		self.set_right_key_handler(self.back)
+
 
 class ArtistMusicsWindow(Window):
-	def __init__(self, player_ui, navigator, service_locator):
-		Window.__init__(self, player_ui, navigator)
+	def __init__(self, quit_handler, navigator, service_locator):
+		Window.__init__(self, quit_handler, navigator)
 		self.__music_repository = service_locator.music_repository
-		self.body = appuifw.Listbox([u"empty"], self.go_to)
+		self.body = self.create_listbox([u"empty"], self.go_to)
 		self.menu = self.get_menu_items()
 		self.artist = None
 
@@ -1447,15 +1500,15 @@ class ArtistMusicsWindow(Window):
 
 	def show(self):
 		self.body.set_list(self.get_list_items())
-		appuifw.app.exit_key_handler = self.navigator.go_to_last
+		self.set_right_key_handler(self.navigator.go_to_last)
 
 
 class AlbumsWindow(Window):
-	def __init__(self, player_ui, navigator, service_locator):
-		Window.__init__(self, player_ui, navigator)
+	def __init__(self, quit_handler, navigator, service_locator):
+		Window.__init__(self, quit_handler, navigator)
 		self.__music_repository = service_locator.music_repository
 			
-		self.body = appuifw.Listbox([u"empty"], self.go_to)
+		self.body = self.create_listbox([u"empty"], self.go_to)
 		self.menu = self.get_menu_items()
 
 	def get_list_items(self):
@@ -1487,16 +1540,16 @@ class AlbumsWindow(Window):
 
 	def show(self):
 		self.body.set_list(self.get_list_items())
-		appuifw.app.exit_key_handler = self.back
+		self.set_right_key_handler(self.back)
 
 
 class NowPlayingWindow(Window):
-	def __init__(self, player_ui, navigator):
-		Window.__init__(self, player_ui, navigator)
+	def __init__(self, quit_handler, navigator):
+		Window.__init__(self, quit_handler, navigator)
 		self.music_list = None
 		self.is_visible = False
 		self.bg_img = self.load_image()
-		self.body = appuifw.Canvas(self.render) # TODO: destruir quando nao estiver visivel
+		self.body = self.create_canvas(self.render)
 		self.presenter = None
 		self.__random = False
 
@@ -1538,27 +1591,24 @@ class NowPlayingWindow(Window):
 	def show_music_information(self, music):
 		if not self.is_visible: return
 
-		self.body.clear()
 		self.body.blit(self.bg_img)
-		
+
 		tr = TextRenderer(self.body)
 		tr.spacing = 6
-		tr.set_position((10,10))
+		tr.set_position((10,9))
 		
-		tr.render_line("Currently...", (u"normal", 18, graphics.FONT_BOLD), fill=(255, 0, 0))
-		tr.add_blank_line()
-		tr.render_line("  Artist: %s" % music.artist, (u"title", 16, graphics.FONT_BOLD))
-		tr.render_line("  Track: %s" % music.title, (u"title", 16, graphics.FONT_BOLD))
+		tr.render_line("Now playing...", (u"legend", 19, graphics.FONT_BOLD | graphics.FONT_ANTIALIAS), fill=(255, 255, 255))
+		tr.add_blank_line(2)
+		tr.render_line("  Artist: %s" % music.artist, (u"title", 16, graphics.FONT_BOLD | graphics.FONT_ANTIALIAS))
+		tr.render_line("  Track: %s" % music.title, (u"title", 16, graphics.FONT_BOLD | graphics.FONT_ANTIALIAS))
 		tr.add_blank_line()
 		tr.render_line("     %s - %s" % (music.current_position_formatted(), 
-					music.length_formatted()), (u"normal", 13, graphics.FONT_BOLD))
+					music.length_formatted()), (u"normal", 13, graphics.FONT_ANTIALIAS))
 		tr.render_line("     Status: %s       %s" % (music.get_status_formatted(), 
-					self.music_list.current_position_formated()), (u"normal", 13, graphics.FONT_BOLD))
-		tr.add_blank_line()
-		tr.add_blank_line()
-		tr.add_blank_line()
+					self.music_list.current_position_formated()), (u"normal", 13, graphics.FONT_ANTIALIAS))
+		tr.add_blank_line(5)
 		if self.__random:
-			tr.render_line("     Playing in random mode", (u"normal", 10, graphics.FONT_BOLD))
+			tr.render_line("         Playing in random mode", (u"normal", 10, graphics.FONT_BOLD | graphics.FONT_ANTIALIAS))
 		
 	def finished_music(self, music):
 		self.as_presenter.finished_music(music)
@@ -1601,7 +1651,7 @@ class NowPlayingWindow(Window):
 		self.body.bind(EKeySelect, self.presenter.play_stop)
 	
 	def show(self):
-		appuifw.app.exit_key_handler = self.back
+		self.set_right_key_handler(self.back)
 		self.update_menu(self.get_menu_items())
 		self.bind_key_events()
 		
@@ -1610,11 +1660,12 @@ class NowPlayingWindow(Window):
 
 		self.show_music_information(self.music_list.current_music)
 
+
 class CurrentHistoryWindow(Window):
-	def __init__(self, player_ui, navigator, service_locator):
-		Window.__init__(self, player_ui, navigator)
+	def __init__(self, quit_handler, navigator, service_locator):
+		Window.__init__(self, quit_handler, navigator)
 		self.__music_history_repository = service_locator.history_repository
-		self.body = appuifw.Listbox([(u"empty", u"empty")], self.go_to)
+		self.body = self.create_listbox([(u"empty", u"empty")], self.go_to)
 		self.menu = self.get_menu_items()
 
 	def get_list_items(self):
@@ -1642,20 +1693,8 @@ class CurrentHistoryWindow(Window):
 
 	def show(self):
 		self.body.set_list(self.get_list_items())
-		appuifw.app.exit_key_handler = self.back
+		self.set_right_key_handler(self.back)
 
-
-class SettingsWindow(Window):
-	pass
-
-class LyricsWindow(Window):
-	pass
-
-class ArtistInfoWindow(Window):
-	pass
-
-class UserProfileWindow(Window):
-	pass
 
 class NowPlayingPresenter(object):
 	def __init__(self, view, music_list):
@@ -1738,7 +1777,7 @@ class AudioScrobblerPresenter(object):
 				try:
 					operation()
 					result = True
-				except: pass # TODO Logging here
+				except: pass
 			if not result:
 				self.__wanna_connect = False
 		
@@ -1826,6 +1865,7 @@ class AudioScrobblerPresenter(object):
 			else:
 				self.__now_playing_error_counter = 0
 
+
 class AccessPointServices(object):
 	def __init__(self, default_ap=None):
 		self.__default_ap = default_ap
@@ -1851,6 +1891,7 @@ class AccessPointServices(object):
 			self.__ap.stop()
 			socket.set_default_access_point(None)
 
+
 class TextRenderer:
 	def __init__(self, canvas):
 		self.canvas = canvas
@@ -1860,8 +1901,8 @@ class TextRenderer:
 	def set_position(self, coords):
 		self.coords = coords
 
-	def add_blank_line(self, line_height=10):
-		self.coords[1] += line_height
+	def add_blank_line(self, num_of_blank_lines=1, line_height=10):
+		self.coords[1] += line_height * num_of_blank_lines
 
 	def move_cursor(self, x, y):
 		self.coords[0] += x
@@ -1887,7 +1928,6 @@ class AspyPlayerApplication(object):
 		finally:
 			ui.close()
 			sl.close()
-			print "bye"
 
 ##########################################################
 ######################### TESTING 
@@ -1895,7 +1935,6 @@ class AspyPlayerApplication(object):
 class Fixture(object):
 	def __init__(self):
 		self.errors = []
-		self.sl = ServiceLocator()
 		self.title = ""
 	
 	def assertEquals(self, expected, result, description):
@@ -1906,16 +1945,51 @@ class Fixture(object):
 		if not condition: 
 			self.errors.append(description + " => NOT OK")
 
+class FixtureRunner(object):
+	def __init__(self, fixtures):
+		self.fixtures = fixtures
+	
+	def run(self):
+		summary = []
+		for test in self.fixtures:
+			test.run()
+			if test.errors:
+				summary.append(test.title)
+				summary.extend(test.errors)
+		
+		if not summary:
+			appuifw.note(unicode("All %i test suites passed!" % len(self.fixtures)), "info")
+		else:
+			msg = ""
+			for item in summary:
+				msg += item + "\n"
+			
+			prev_body = appuifw.app.body
+			prev_back = appuifw.app.exit_key_handler
+			
+			def back():
+				appuifw.app.body = prev_body
+				appuifw.app.exit_key_handler = prev_back
+			
+			appuifw.app.body = appuifw.Text()
+			appuifw.app.body.set(unicode("Failed: Info: \n%s" % msg))
+			appuifw.app.exit_key_handler = back
+
+
+class AspyFixture(Fixture):
+	def __init__(self):
+		Fixture.__init__(self)
+		self.sl = ServiceLocator()
+	
 	def load_music(self):
 		music = Music("E:\\Music\\Bloc Party - Silent Alarm\\01 - Like Eating Glass.mp3")
 		music.length = 261
 		music.played_at = int(time.time()) - 40
 		return music
-	
 
-class AudioScrobblerServiceFixture(Fixture):
+class AudioScrobblerServiceFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 		f = open("E:\\as.pwd", "rb")
 		self.pwd = f.read().replace(" ", "")
 		f.close()
@@ -1935,9 +2009,9 @@ class AudioScrobblerServiceFixture(Fixture):
 			self.assertTrue(result, "Sent music to AS")
 
 
-class FileSystemServicesFixture(Fixture):
+class FileSystemServicesFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 		self.title = "File System Services tests"
 
 	def run(self):
@@ -1951,9 +2025,9 @@ class FileSystemServicesFixture(Fixture):
 		self.assertEquals(14, len(files), "Num of files loaded")
 
 
-class MusicHistoryRepositoryFixture(Fixture):		
+class MusicHistoryRepositoryFixture(AspyFixture):		
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 		self.title = "Music history repository tests"
 
 	def run(self):
@@ -1969,9 +2043,9 @@ class MusicHistoryRepositoryFixture(Fixture):
 		self.assertTrue(len(musics) > 0, "Repository not empty")
 
 
-class MusicFixture(Fixture):
+class MusicFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 		self.title = "Music tests"
 
 	def run(self):
@@ -1987,8 +2061,6 @@ class MusicFixture(Fixture):
 		
 		current_pos_formatted = music.current_position_formatted()
 		self.assertTrue(unicode("02:15") == unicode(current_pos_formatted), "Current position formatted")
-		
-		self.assertTrue(music.remove_X00("ABC\x00") == "ABC", "Remove unicode spaces")
 		
 		music.get_player_position_in_seconds = lambda: 200
 		self.assertTrue(music.can_update_position(), "Can update position")
@@ -2014,9 +2086,9 @@ class MusicFixture(Fixture):
 #		music_test = Music("E:\\Music\\Kasabian - Empire\\03 - Last Trip (In Flight).mp3");
 #		self.assertEquals("Last Trip (In Flight)", music_test.title, "UUUU... teste")
 
-class UserFixture(Fixture):
+class UserFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 		self.title = "User tests"
 
 	def run(self):
@@ -2029,9 +2101,9 @@ class UserFixture(Fixture):
 		self.assertTrue(user2.password == "abc", "Password")
 
 
-class MusicPlayerFixture(Fixture):
+class MusicPlayerFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 		self.title = "Music player tests"
 
 	def run(self):
@@ -2084,9 +2156,9 @@ class FakePlayer(object):
 		pass
 
 
-class MusicHistoryFixture(Fixture):
+class MusicHistoryFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 		self.title = "Music history tests"
 
 	def run(self):
@@ -2133,9 +2205,9 @@ class MusicHistoryFixture(Fixture):
 		self.assertTrue(l[2] == 35, "Batch 3")
 	
 
-class AudioScrobblerUserRepositoryFixture(Fixture):
+class AudioScrobblerUserRepositoryFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 		self.title = "AudioScrobblerUserRepository tests"
 		f = open("E:\\as.pwd", "rb")
 		self.pwd = f.read().replace(" ", "")
@@ -2150,12 +2222,12 @@ class AudioScrobblerUserRepositoryFixture(Fixture):
 		self.assertEquals(u.password, u2.password, "Passwords")
 	
 
-class MusicListFixture(Fixture):
+class MusicListFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 	
 	def run(self):
-		musics = [i for i in range(3)]
+		musics = [Music() for i in range(3)]
 		
 		ml = MusicList(musics, None, None)
 		
@@ -2187,15 +2259,15 @@ class MusicListFixture(Fixture):
 		
 		ml2 = MusicList(musics2, None, None)
 		ml2.random()
-		ml2.check_random()
+		ml2.update_playing_mode_if_necessary()
 		ml2.move_next()
 		
-		self.assertTrue(ml2.current_music.number != m2.number, "Next is not really the next now")
+		self.assertTrue(ml2.current_music.number != m2.number, "Next is not really the next now (shuffle, sometimes test can fail)")
 		
 
-class HardErrorControllerFixture(Fixture):
+class HardErrorControllerFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 		self.title = "HardErrorControllerFixture"
 		
 	def run(self):
@@ -2220,15 +2292,14 @@ class HardErrorControllerFixture(Fixture):
 		hec.handle_hard_error()
 		self.assertTrue(l, "New handshake required")
 
-class UnicodeHelperFixture(Fixture):
+class UnicodeHelperFixture(AspyFixture):
 	def __init__(self):
-		Fixture.__init__(self)
+		AspyFixture.__init__(self)
 	
 	def run(self):
 		input_a = "E:\\Music\\Testing\\Lêusy Reputation.mp3"
 		val = UnicodeHelper.safe_unicode(input_a)
 		valx = UnicodeHelper.safe_unicode(val)
-		print val
 		f = open(val.encode("utf8"))
 		f.close()
 		
@@ -2237,9 +2308,8 @@ class UnicodeHelperFixture(Fixture):
 		f = open(val.encode("utf8"))
 		f.close()
 		
-			
-
-class Fixtures(object):
+		
+class AspyFixtures(object):
 	def __init__(self):
 		self.tests = [
 			MusicFixture(),
@@ -2257,32 +2327,8 @@ class Fixtures(object):
 			UnicodeHelperFixture()
 		]
 		
-	
 	def run(self):
-		summary = []
-		for test in self.tests:
-			test.run()
-			if test.errors:
-				summary.append(test.title)
-				summary.extend(test.errors)
-		
-		if not summary:
-			appuifw.note(unicode("All %i test suites passed!" % len(self.tests)), "info")
-		else:
-			msg = ""
-			for item in summary:
-				msg += item + "\n"
-			
-			prev_body = appuifw.app.body
-			prev_back = appuifw.app.exit_key_handler
-			
-			def back():
-				appuifw.app.body = prev_body
-				appuifw.app.exit_key_handler = prev_back
-			
-			appuifw.app.body = appuifw.Text()
-			appuifw.app.body.set(unicode("Failed: Info: \n%s" % msg))
-			appuifw.app.exit_key_handler = back
+		FixtureRunner(self.tests).run()
  
 
 ##########################################################
