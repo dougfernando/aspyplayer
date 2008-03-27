@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.1.3 beta"
+__version__ = "0.1.4 beta"
 
 from random import shuffle
 from key_codes import EKeyLeftArrow, EKeyRightArrow, EKeyUpArrow, EKeyDownArrow, EKeySelect 
@@ -37,20 +37,31 @@ import traceback
 class Id3InfoReader(object):
 	def __init__(self, file_path):
 		self.file_path = file_path
-		self.read_v1()
+		version_marker, fp = self.init_file(self.file_path)
 		
-	def read_v1(self):
+		if version_marker == "TAG":
+			self.read_v1(fp)
+		else:
+			self.read_v2(fp)
+
+	def init_file(self, path):
 		path = self.file_path.encode("utf8")
 		fp = open(path, "r")
 		fp.seek(-128, 2)
-		fp.read(3)
+		marker = fp.read(3)
+		
+		return (marker, fp)
 
+	def file_path_to_title(self):
+		if len(self.file_path) > 18:
+			return UnicodeHelper.safe_unicode("..." + self.file_path[-18:-4])
+		else:
+			return UnicodeHelper.safe_unicode(self.file_path)
+		
+	def read_v1(self, fp):
 		self.title = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
 		if not self.title: 
-			if len(self.file_path) > 18:
-				self.title = UnicodeHelper.safe_unicode("..." + self.file_path[-18:])
-			else:
-				self.title = UnicodeHelper.safe_unicode(self.file_path)
+			self.title = self.file_path_to_title()
 		
 		self.artist = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
 		if not self.artist: 
@@ -61,10 +72,24 @@ class Id3InfoReader(object):
 			self.album = u"Unknow"
 		
 		self.year = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(4)))
-		self.comment = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(28)))
-		self.number = u""
-
+		
+		comment = fp.read(30)
+		if ord(comment[-2]) == 0 and ord(comment[-1]) != 0:
+			self.number = ord(comment[-1])
+			self.comment = UnicodeHelper.safe_unicode(self.remove_X00(comment[:-2]))
+		else:
+			self.number = -1
+			self.comment = UnicodeHelper.safe_unicode(self.remove_X00(comment))
+		
 		fp.close()
+	
+	def read_v2(self, fp):
+		self.title = self.file_path_to_title()
+		self.artist = u"Unknow"
+		self.album = u"Unknow"
+		self.year = None
+		self.comment = None
+		self.number = -1
 	
 	def remove_X00(self, value):
 		return value.replace("\x00", "")
@@ -97,7 +122,7 @@ class Music(object):
 			self.album = None
 			self.year = None
 			self.comment = None
-			self.number = ""
+			self.number = -1
 
 	def __str__(self):
 		return u"  Artist: %s\n  Title: %s\n" % (self.artist, self.title)
@@ -179,6 +204,11 @@ class Music(object):
 	def can_send_now_playing(self):
 		return not self.now_playing_sent and self.position > 5
 
+	def number_to_str(self):
+		if self.number == -1:
+			return u""
+		else:
+			return unicode(str(self.number))
 
 class MusicPlayer(object):
 	current_volume = -1
@@ -811,7 +841,7 @@ class AudioScrobblerService(object):
 			"t": unicode(music.title).encode("utf-8"), 
 			"b": unicode(music.album).encode("utf-8"), 
 			"l": music.length, 
-			"n": music.number, 
+			"n": music.number_to_str(), 
 			"m": music.music_brainz_ID
 		}
 
@@ -869,7 +899,7 @@ class AudioScrobblerService(object):
 				"r": "", 
 				"l": music.length, 
 				"b": unicode(music.album).encode("utf-8"), 
-				"n": music.number, 
+				"n": music.number_to_str(), 
 				"m": music.music_brainz_ID
 			})
 
@@ -1154,7 +1184,7 @@ class ScreenNavigator(object):
 		
 		self.go_to(self.__albums_window)
 
-	def go_to_musics(self, musics=None):
+	def go_to_musics(self, musics=None, musics_comparer=None):
 		if not self.__musics_window:
 			self.__musics_window = MusicsWindow(self.__quit_handler, self)
 		
@@ -1162,7 +1192,10 @@ class ScreenNavigator(object):
 			self.__musics_window.musics = musics
 		else:
 			assert self.__musics_window.musics
-			
+		
+		if musics_comparer != None:
+			self.__musics_window.musics_comparer = musics_comparer
+		
 		self.go_to(self.__musics_window)
 
 	def go_to_now_playing(self, musics=[], index=0):
@@ -1258,9 +1291,6 @@ class Window(object):
 
 	def basic_last_menu_items(self):
 		return [
-			(u"Misc", (
-				(u"Settings", lambda: None), 
-				(u"Testing", self.tests))),
 			(u"About", self.about), 
 			(u"Exit", self.quit)]
 
@@ -1272,14 +1302,14 @@ class Window(object):
 		self.menu.extend(new_menu)
 
 	def quit(self):
-		if self.confirm("Are you sure you want to exit the application?"):
-			self.quit_handler()
+		self.quit_handler()
 
 	def create_listbox(self, items, handler):
 		return appuifw.Listbox(items, handler)
 	
 	def create_canvas(self, redraw_handler):
 		return appuifw.Canvas(redraw_handler)
+	
 	
 class MainWindow(Window):
 	def __init__(self, quit_handler, navigator, service_locator):
@@ -1315,6 +1345,7 @@ class MainWindow(Window):
 			(u"Update Music Library", self.update_music_library),
 			(u"Now playing", self.navigator.go_to_now_playing)]
 		items.extend(self.basic_lastfm_menu_items())
+		items.append((u"Testing", self.tests))
 		items.extend(self.basic_last_menu_items())
 		
 		return items
@@ -1372,11 +1403,13 @@ class MusicsWindow(Window):
 		self.body = self.create_listbox([u"empty"], self.go_to)
 		self.menu = self.get_menu_items()
 		self.musics = []
+		self.musics_comparer = self.title_comparer
 
 	def get_list_items(self):
 		list_items = []
 		
 		self.sort_musics()
+		
 		i = 1
 		for music in self.musics:
 			list_items.append(u"%i-%s" % (i, music.title))
@@ -1384,8 +1417,17 @@ class MusicsWindow(Window):
 		
 		return list_items
 	
+	def title_comparer(self, x, y):
+		if x.title.startswith(".."):
+			return 1
+		elif y.title.startswith(".."):
+			return -1
+		else:
+			return cmp(x.title.upper(), y.title.upper())
+	
 	def sort_musics(self):
-		self.musics.sort(lambda m1, m2: cmp(m1.number.upper(), m2.number.upper()))
+		self.musics.sort(self.musics_comparer)
+		self.musics_comparer = self.title_comparer
 	
 	def back(self):
 		self.navigator.go_to_select_window()
@@ -1416,7 +1458,7 @@ class AllMusicsWindow(MusicsWindow):
 		self.musics = self.__music_repository.find_all()
 		MusicsWindow.show(self)
 
-
+		
 class ArtistsWindow(Window):
 	def __init__(self, quit_handler, navigator, service_locator):
 		Window.__init__(self, quit_handler, navigator)
@@ -1465,14 +1507,16 @@ class ArtistMusicsWindow(Window):
 
 	def go_to(self):
 		index = self.body.current()
+		comparer = None
 		if index == 0:
 			musics = self.__music_repository.find_all_by_artist(self.artist)
 		else:
 			album_selected = self.albums[index]
 			musics = self.__music_repository.find_all_musics_artist_album(self.artist, album_selected)
+			comparer = lambda x, y: cmp(x.number, y.number)
 
 		assert musics
-		self.navigator.go_to_musics(musics)
+		self.navigator.go_to_musics(musics, comparer)
 
 	def get_list_items(self):
 		assert self.artist
@@ -1536,7 +1580,7 @@ class AlbumsWindow(Window):
 		album_selected = self.albums[index]
 		musics = self.__music_repository.find_all_by_album(album_selected)
 		assert musics
-		self.navigator.go_to_musics(musics)
+		self.navigator.go_to_musics(musics, lambda x, y: cmp(x.number, y.number))
 
 	def show(self):
 		self.body.set_list(self.get_list_items())
@@ -1954,6 +1998,7 @@ class FixtureRunner(object):
 		for test in self.fixtures:
 			test.run()
 			if test.errors:
+				summary.append(u"\n")
 				summary.append(test.title)
 				summary.extend(test.errors)
 		
@@ -2052,9 +2097,11 @@ class MusicFixture(AspyFixture):
 		music = self.load_music()
 		music.position = 135
 		
-		self.assertTrue(unicode(music.title) == u"Like Eating Glass", "Music title")
-		self.assertTrue(unicode(music.artist) == u"Bloc Party", "Music artist")
-		self.assertTrue(unicode(music.album) == u"Silent Alarm [Japan Bonus Trac", "Music Album")
+		self.assertEquals(u"Like Eating Glass", unicode(music.title), "Music title")
+		self.assertEquals(u"Bloc Party", unicode(music.artist), "Music artist")
+		self.assertEquals(u"Silent Alarm [Japan Bonus Trac", unicode(music.album), "Music Album")
+		self.assertEquals(1, music.number, "Music Number")
+		
 		
 		length_formatted = music.length_formatted()
 		self.assertTrue(unicode("04:21") == unicode(length_formatted), "Correct length formatted") 
@@ -2246,15 +2293,16 @@ class MusicListFixture(AspyFixture):
 		
 		# random
 		m1 = Music()
-		m1.number = "1"
+		m1.number = 1
 		m2 = Music()
-		m2.number = "2"
+		m2.number = 2
 		m3 = Music()
-		m3.number = "3"
+		m3.number = 3
 		m4 = Music()
-		m4.number = "4"
-
-		musics2 = [m1, m2, m3]
+		m4.number = 4
+		m5 = Music()
+		m5.number = 5
+		musics2 = [m1, m2, m3, m4, m5]
 
 		
 		ml2 = MusicList(musics2, None, None)
@@ -2308,6 +2356,23 @@ class UnicodeHelperFixture(AspyFixture):
 		f = open(val.encode("utf8"))
 		f.close()
 		
+
+class Id3InfoReaderFixture(AspyFixture):
+	def __init__(self):
+		AspyFixture.__init__(self)
+		self.title = "Id3InfoReaderFixture"	
+	
+	def run(self):
+		input_a = "E:\\Music\\Testing\\02 - Shoot The Runner.mp3"
+		reader = Id3InfoReader(input_a)
+		
+		marker, fp = reader.init_file(input_a)
+		self.assertTrue(marker != "TAG", "Not Id3v1")
+		
+		reader = Id3InfoReader(input_a)
+		title = reader.title
+		self.assertEquals("Runner", title[-6:], "Uses the file name if v2")
+		
 		
 class AspyFixtures(object):
 	def __init__(self):
@@ -2324,7 +2389,8 @@ class AspyFixtures(object):
 			#DbHelper
 			#PlayerUI,
 			HardErrorControllerFixture(),
-			UnicodeHelperFixture()
+			UnicodeHelperFixture(),
+			Id3InfoReaderFixture()
 		]
 		
 	def run(self):
