@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project name="last_fm" default="make_sis" basedir=".">
 
-	<property name="root_dir" value="C:\dev\python\pythonenv" />
+	<property name="root_dir" value="C:\dev\python\aspyplayer" />
 
-	<property name="source" value="${root_dir}\src" />
+	<property name="source" value="${root_dir}\trunk\src" />
 	<property name="output_sis" value="${root_dir}\sis_files\aspyplayer_beta.sis" />
 	<property name="to_pack_dir" value="${root_dir}\to_pack_dir" />
 
