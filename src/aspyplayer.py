@@ -65,11 +65,11 @@ class Id3InfoReader(object):
 		
 		self.artist = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
 		if not self.artist: 
-			self.artist = u"Unknow"
+			self.artist = u"Unknown"
 		
 		self.album = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(30)))
 		if not self.album: 
-			self.album = u"Unknow"
+			self.album = u"Unknown"
 		
 		self.year = UnicodeHelper.safe_unicode(self.remove_X00(fp.read(4)))
 		
@@ -85,8 +85,8 @@ class Id3InfoReader(object):
 	
 	def read_v2(self, fp):
 		self.title = self.file_path_to_title()
-		self.artist = u"Unknow"
-		self.album = u"Unknow"
+		self.artist = u"Unknown"
+		self.album = u"Unknown"
 		self.year = None
 		self.comment = None
 		self.number = -1
@@ -598,7 +598,7 @@ class MusicRepository(object):
 				music = Music(file)
 				new_musics.append(music)
 			except:
-				self.__logger.debug("Addind file to library error: '%s'" % \
+				self.__logger.debug("Adding file to library error: '%s'" % \
 					''.join(traceback.format_exception(*sys.exc_info())))
 
 		for music in new_musics:
@@ -998,7 +998,7 @@ class FileSystemServices:
 			files_filtered = filter(predicate, map(UnicodeHelper.safe_unicode, names))
 			
 			for file in files_filtered:
-				full_file_path = "%s\\%s" %(dirname, file)
+				full_file_path = "%s\\%s" %(UnicodeHelper.safe_unicode(dirname), file)
 				result.append(full_file_path)
 		
 		os.path.walk(root_dir, walk, None)
@@ -2161,7 +2161,7 @@ class MusicPlayerFixture(AspyFixture):
 		
 		player.configure_volume()
 		
-		self.assertTrue(player.__class__.current_volume == 2, "Currenct volume")
+		self.assertTrue(player.__class__.current_volume == 2, "Current volume")
 		self.assertTrue(player.volume_step == 1, "Correct step")
 		
 		player.loaded = True
