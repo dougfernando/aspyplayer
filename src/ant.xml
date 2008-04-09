@@ -10,7 +10,7 @@
 	<property name="python_exec_path" value="C:\dev\tools\Python25\python.exe" />
 	<property name="ensymble_path" value="c:\dev\tools\ensymble_python2.5-0.26.py" />
 	<property name="version" value="0.1.4" />
-	<property name="uid" value="0x17051979" />
+	<property name="uid" value="0xE1751979" />
 	<property name="app_name" value="aspyplayer" />
 	<property name="app_icon" value="${source}\logo.svg" />
 	<property name="sis_caps" value="NetworkServices+LocalServices+ReadUserData+WriteUserData" />
