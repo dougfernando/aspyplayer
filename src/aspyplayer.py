@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.1.4 beta"
+__version__ = "0.1.5 beta"
 
 from random import shuffle
 from key_codes import EKeyLeftArrow, EKeyRightArrow, EKeyUpArrow, EKeyDownArrow, EKeySelect 
@@ -129,8 +129,7 @@ class Music(object):
 
 	def play(self, callback):
 		self.player.play(callback)
-		if self.__logger.debug:
-			self.__logger.debug("Playing: %s" % self.title)
+		self.__logger.debug("Playing: %s" % self.title)
 	
 	def stop(self):
 		self.player.stop()
@@ -324,7 +323,7 @@ class MusicList(object):
 			self.current_music = None
 	
 	def log_music_list(self):
-		if self.__logger.debug:
+		if self.__logger.debug_enabled():
 			self.__logger.debug("Music list:")
 			for music in self.__musics:
 				self.__logger.debug("\t%s-%s" % (music.number, music.title))
@@ -938,7 +937,8 @@ class UnicodeHelper(object):
 
 
 class LogFactory(object):
-	def create_for(name, file_path="c:\\data\\aspyplayer\\log.txt"):
+	def create_for(name):
+		file_path = "%sdata\\aspyplayer\\log.txt" % FileSystemServices().get_data_drive()
 		logger = Logger(str(name), file_path)
 		return logger
 	
@@ -951,19 +951,25 @@ class Logger(object):
 		self.path = path
 		self.level = 0
 		
+	def debug_enabled(self):
+		return self.level < 1
+	
+	def info_enabled(self):
+		return self.level < 2
+		
 	def debug(self, msg):
-		if self.level == 0:
+		if self.debug_enabled():
 			try:
 				f = open(self.path, "a")
-				f.write("\nDEBUG - %s" % msg)
+				f.write("DEBUG - %s \n#" % msg)
 				f.close()
 			except: pass
 	
 	def info(self, msg):
-		if self.level > 0:
+		if self.info_enabled():
 			try:
 				f = open(self.path, "a")
-				f.write("\nINFO - %s" % msg)
+				f.write("INFO - %s \n#" % msg)
 				f.close()
 			except: pass
 			
@@ -971,7 +977,7 @@ class Logger(object):
 class ServiceLocator(object):
 	def __init__(self):
 		self.file_system_services = FileSystemServices()
-		self.db_helper = DbHelper("c:\\data\\aspyplayer\\aspyplayer.db", self.file_system_services)
+		self.db_helper = DbHelper(self.file_system_services.get_db_file_path(), self.file_system_services)
 		self.history_repository = MusicHistoryRepository(self.db_helper)
 		self.user_repository = AudioScrobblerUserRepository(self.db_helper)
 		self.as_service = AudioScrobblerService(self.user_repository)	
@@ -1020,6 +1026,16 @@ class FileSystemServices:
 		all_music.extend(all_musics_in_c)
 		all_music.extend(all_musics_in_e)
 		return all_music
+
+	def get_db_file_path(self):
+		return "%sdata\\aspyplayer\\aspyplayer.db" % self.get_data_drive()
+
+	def get_data_drive(self):
+		if not self.exists("E:\\"):
+			return "C:\\"
+		
+		return "E:\\"
+
 
 class DbHelper(object):
 	def __init__(self, dbpath, file_system_services):
@@ -2069,6 +2085,7 @@ class FileSystemServicesFixture(AspyFixture):
 		files = fss.find_all_files("E:\\Music\\Muse - Absolution", ".mp3")
 		self.assertEquals(14, len(files), "Num of files loaded")
 
+		self.assertEquals("E:\\data\\aspyplayer\\aspyplayer.db", fss.get_db_file_path(), "DB file path")
 
 class MusicHistoryRepositoryFixture(AspyFixture):		
 	def __init__(self):
@@ -2403,8 +2420,10 @@ class AspyFixtures(object):
 if __name__ == '__main__':
 	logger = LogFactory.create_for("main")
 	try:
+		logger.info("Starting the ASPY player")
 		AspyPlayerApplication().run()
+		logger.info("Exiting the ASPY player")
 	except:
-		logger.debug("General error: '%s'" % ''.join(traceback.format_exception(*sys.exc_info())))
+		logger.info("ASPY Player General error: '%s'" % ''.join(traceback.format_exception(*sys.exc_info())))
 	
 	
