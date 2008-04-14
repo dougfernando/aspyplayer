@@ -1,7 +1,7 @@
 # Author: Douglas Fernando da Silva - doug.fernando at gmail.com
 # Copyright 2008
 # 
-# Licensed under the Apache License, Version 2.0 (the "License");
+# Licensed under the Apache License, Version 2.0 (the "License")
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 # 
@@ -584,6 +584,24 @@ class MusicRepository(object):
 		
 		result = self.__db_helper.execute_nonquery(cmd)
 		assert result > 0
+
+	def rebuild_library(self, musics_path):
+		cmd = "DELETE FROM Music"
+		result = self.__db_helper.execute_nonquery(cmd)
+
+		new_musics = []
+		for file in musics_path:
+			try:
+				music = Music(file)
+				new_musics.append(music)
+			except:
+				self.__logger.debug("Adding file to library error: '%s'" % \
+					''.join(traceback.format_exception(*sys.exc_info())))
+
+		for music in new_musics:
+			self.save(music) 
+
+		return len(new_musics)
 
 	def update_library(self, musics_path):
 		all_music_in_db_path = self.find_all_musics_path()
@@ -1353,6 +1371,12 @@ class MainWindow(Window):
 		self.body.set_list(self.get_list_items())
 		self.show_message("Library updated. Added: %i, Deleted: %i" % result)
 	
+	def rebuild_music_library(self):
+		self.show_message("This operation can take some time...")
+		result = self.__music_repository.rebuild_library(self.get_all_music_files_path())
+		self.body.set_list(self.get_list_items())
+		self.show_message("Library rebuilt. Added: %i" % result)
+
 	def get_all_music_files_path(self):
 		return self.__fs_services.get_all_music_files_path_in_device()
 	
@@ -1361,7 +1385,9 @@ class MainWindow(Window):
 			(u"Update Music Library", self.update_music_library),
 			(u"Now playing", self.navigator.go_to_now_playing)]
 		items.extend(self.basic_lastfm_menu_items())
-		items.append((u"Testing", self.tests))
+		items.append((u"Admin", (
+				(u"Testing", self.tests),
+				(u"Rebuild Music Library", self.rebuild_music_library))))
 		items.extend(self.basic_last_menu_items())
 		
 		return items
