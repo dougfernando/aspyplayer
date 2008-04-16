@@ -1827,13 +1827,14 @@ class NowPlayingPresenter(object):
 	def play_stop(self):
 		if self.music_list:
 			if self.music_list.current_music.is_playing():
-				self.stop()
+				self.pause()
 			else:
 				self.play()
-
+			
 	def pause(self): 
 		if self.music_list:
 			self.music_list.pause()
+			self.view.update_music(self.music_list.current_music)
 	
 	def stop(self):
 		if self.music_list:	
