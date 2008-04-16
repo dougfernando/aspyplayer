@@ -188,10 +188,7 @@ class Music(object):
 			return unicode("%02i:%02i" % (minutes, seconds))
 	
 	def get_status_formatted(self):
-		if self.is_playing():
-			return "Playing"
-		
-		return "Stopped" 
+		return self.player.get_status_formatted() 
 
 	def played_at_formatted(self):
 		ts = time.gmtime(self.played_at)
@@ -208,6 +205,7 @@ class Music(object):
 			return u""
 		else:
 			return unicode(str(self.number))
+
 
 class MusicPlayer(object):
 	current_volume = -1
@@ -233,6 +231,7 @@ class MusicPlayer(object):
 		else:
 			self.__player.set_position(self.__current_position)
 		
+		self.__paused = False
 		self.__player.play(times=1, interval=0, callback=callback)
 
 	def create_player_for(self, path):
@@ -248,17 +247,19 @@ class MusicPlayer(object):
 		self.__player.set_volume(self.__class__.current_volume)
 		
 	def is_loading(self):
-		return self.__loading
+		return self.__loading or self.__player.state() == self.get_not_ready_state() 
 			
 	def stop(self):
 		if self.loaded:
-			self.__player.stop()
+			if self.is_playing():
+				self.__player.stop()
 			self.__player.close()
 			self.loaded = False
+			self.__paused = False
 	
 	def pause(self):
 		if self.loaded:
-			self.__current_position = player.current_position()
+			self.__current_position = self.__player.current_position()
 			self.__player.stop()
 			self.__paused = True
 
@@ -278,11 +279,24 @@ class MusicPlayer(object):
 			
 			self.__player.set_volume(self.__class__.current_volume)
 
+	def get_status_formatted(self):
+		if self.__player:
+			state = self.__player.state()
+			if state == self.get_is_playing_state():
+				return "Playing"
+			elif self.__paused:
+				return "Paused"
+		
+		return "Stopped"
+
 	def is_playing(self):
 		if not self.__player: 
 			return False
 		
 		return self.__player.state() == self.get_is_playing_state()
+
+	def get_not_ready_state(self):
+		return audio.ENotReady
 
 	def get_is_playing_state(self):
 		return audio.EPlaying
@@ -376,6 +390,13 @@ class MusicList(object):
 
 	def play_callback(self, current, previous, err):
 		pass
+
+	def pause(self):
+		self.__should_stop = True
+		if self.current_music: 
+			self.wait_if_trying_to_play()
+			self.current_music.pause()
+			self.is_playing = False
 		
 	def stop(self):
 		self.__should_stop = True
@@ -1718,7 +1739,8 @@ class NowPlayingWindow(Window):
 			(u"Back", self.back),
 			(u"Controls", (
 				(u"Play", self.presenter.play),
-				(u"Stop", self.presenter.stop), 
+				(u"Stop", self.presenter.stop),
+				(u"Pause", self.presenter.pause), 
 				(u"Next", self.presenter.next),
 				(u"Previous", self.presenter.previous),
 				(u"Random", self.random))), 
@@ -1811,7 +1833,7 @@ class NowPlayingPresenter(object):
 
 	def pause(self): 
 		if self.music_list:
-			self.music_list.play()
+			self.music_list.pause()
 	
 	def stop(self):
 		if self.music_list:	
@@ -2113,6 +2135,7 @@ class FileSystemServicesFixture(AspyFixture):
 
 		self.assertEquals("E:\\data\\aspyplayer\\aspyplayer.db", fss.get_db_file_path(), "DB file path")
 
+
 class MusicHistoryRepositoryFixture(AspyFixture):		
 	def __init__(self):
 		AspyFixture.__init__(self)
@@ -2145,7 +2168,6 @@ class MusicFixture(AspyFixture):
 		self.assertEquals(u"Silent Alarm [Japan Bonus Trac", unicode(music.album), "Music Album")
 		self.assertEquals(1, music.number, "Music Number")
 		
-		
 		length_formatted = music.length_formatted()
 		self.assertTrue(unicode("04:21") == unicode(length_formatted), "Correct length formatted") 
 		
@@ -2166,12 +2188,6 @@ class MusicFixture(AspyFixture):
 		music.length = 261
 		music.get_player_position_in_seconds = lambda: 135
 		self.assertTrue(music.can_be_added_to_history(), "Can add to history")
-
-		music.is_playing = lambda: True
-		self.assertEquals("Playing", music.get_status_formatted(), "playing status formatted")
-
-		music.is_playing = lambda: False
-		self.assertEquals("Stopped", music.get_status_formatted(), "stopped status formatted")
 
 #		music_test = Music("E:\\Music\\Kasabian - Empire\\03 - Last Trip (In Flight).mp3");
 #		self.assertEquals("Last Trip (In Flight)", music_test.title, "UUUU... teste")
@@ -2238,6 +2254,13 @@ class MusicPlayerFixture(AspyFixture):
 		
 		player.__class__.current_volume = 2
 
+		audio_player.state = lambda: 2
+		self.assertEquals("Playing", player.get_status_formatted(), "playing status formatted")
+
+		audio_player.state = lambda: 0
+		self.assertEquals("Stopped", player.get_status_formatted(), "stopped status formatted")
+
+
 class FakePlayer(object):
 	def max_volume(self):
 		return 10;
@@ -2245,6 +2268,8 @@ class FakePlayer(object):
 	def set_volume(self, value):
 		pass
 
+	def state(self):
+		return 2
 
 class MusicHistoryFixture(AspyFixture):
 	def __init__(self):
